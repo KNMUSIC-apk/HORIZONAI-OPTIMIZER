@@ -10,6 +10,8 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -30,8 +32,8 @@ import java.util.logging.Logger;
  * - Tuyệt đối không ghi API Key ra log.
  *
  * LUỒNG:
- * analyze() và isDue() gọi trên Main Thread.
- * Callback hoàn tất chạy trên luồng async.
+ * - analyze() và isDue() gọi trên Main Thread.
+ * - Callback hoàn tất chạy trên luồng async.
  */
 public final class AIAnalyzer {
 
@@ -101,7 +103,6 @@ public final class AIAnalyzer {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final AIResponseParser parser = new AIResponseParser(mapper);
-
     private final AIProvider provider;
     private final CircuitBreaker breaker;
 
@@ -145,6 +146,7 @@ public final class AIAnalyzer {
 
             try {
                 key = System.getenv(settings.aiKeyEnv);
+
             } catch (SecurityException e) {
                 log.warning(
                         "[HorizonAI] Không thể truy cập Environment Variable."
@@ -157,12 +159,13 @@ public final class AIAnalyzer {
             key = settings.aiApiKey;
         }
 
-        // 3. Không có API Key
+        // 3. Kiểm tra API Key
         if (key == null || key.isBlank()) {
             log.warning(
                     "[HorizonAI] Chưa cấu hình API Key. "
                     + "AI bị tắt, hệ thống cục bộ vẫn hoạt động."
             );
+
             return null;
         }
 
@@ -256,10 +259,14 @@ public final class AIAnalyzer {
         final String userJson;
 
         try {
-
             userJson = mapper.writeValueAsString(input);
 
         } catch (Exception e) {
+
+            log.warning(
+                    "[HorizonAI] Không thể chuyển snapshot thành JSON: "
+                    + e.getClass().getSimpleName()
+            );
 
             return CompletableFuture.completedFuture(
                     Optional.empty()
@@ -288,12 +295,17 @@ public final class AIAnalyzer {
 
                 breaker.onFailure(done);
 
-                log.warning(
-                        "[HorizonAI] AI không khả dụng: "
-                        + (ex == null
-                        ? "rỗng"
-                        : ex.getClass().getSimpleName())
-                );
+                if (ex == null) {
+                    log.warning(
+                            "[HorizonAI] AI không khả dụng: "
+                            + "Phản hồi rỗng."
+                    );
+                } else {
+                    log.warning(
+                            "[HorizonAI] AI không khả dụng: "
+                            + describeError(ex)
+                    );
+                }
 
                 return Optional.<HealthReport>empty();
             }
@@ -313,13 +325,55 @@ public final class AIAnalyzer {
                 breaker.onFailure(done);
 
                 log.warning(
-                        "[HorizonAI] Phản hồi AI không đúng schema, "
-                        + "đã bỏ qua."
+                        "[HorizonAI] Phản hồi AI không đúng schema: "
+                        + describeError(e)
                 );
 
                 return Optional.<HealthReport>empty();
             }
         });
+    }
+
+    /**
+     * Truy xuất nguyên nhân gốc của lỗi.
+     * Giúp tránh chỉ hiển thị CompletionException
+     * hoặc ExecutionException.
+     */
+    private static Throwable unwrapError(Throwable error) {
+
+        Throwable current = error;
+
+        while ((current instanceof CompletionException
+                || current instanceof ExecutionException)
+                && current.getCause() != null
+                && current.getCause() != current) {
+
+            current = current.getCause();
+        }
+
+        return current;
+    }
+
+    /**
+     * Chuyển lỗi thành chuỗi an toàn để ghi log.
+     * Không ghi API Key.
+     */
+    private static String describeError(Throwable error) {
+
+        Throwable root = unwrapError(error);
+
+        String message = root.getMessage();
+
+        if (message == null || message.isBlank()) {
+            return root.getClass().getSimpleName();
+        }
+
+        // Tránh ghi dữ liệu quá dài vào console.
+        if (message.length() > 300) {
+            message = message.substring(0, 300) + "...";
+        }
+
+        return root.getClass().getSimpleName() + ": " + message;
     }
 
     /**
@@ -338,7 +392,6 @@ public final class AIAnalyzer {
                 .exceptionallyCompose(ex -> {
 
                     if (attempt >= settings.aiMaxRetries) {
-
                         return CompletableFuture.failedFuture(ex);
                     }
 
