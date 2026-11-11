@@ -105,6 +105,7 @@ public final class Settings {
         aiModel = c.getString("ai.model", "gpt-4o-mini");
         aiEndpoint = c.getString("ai.endpoint", "https://api.openai.com/v1/chat/completions");
         aiKeyEnv = c.getString("ai.api-key-env", "HORIZONAI_AI_KEY");
+        aiApiKey = c.getString("ai.api-key", "");
         aiIntervalSeconds = clamp(c.getInt("ai.analysis-interval-seconds", 300), 60, 86_400);
         aiMaxRequestsPerHour = clamp(c.getInt("ai.max-requests-per-hour", 12), 1, 1000);
         aiTimeoutSeconds = clamp(c.getInt("ai.timeout-seconds", 20), 3, 120);
