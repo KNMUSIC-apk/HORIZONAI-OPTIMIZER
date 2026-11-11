@@ -87,7 +87,8 @@ public final class MachineTracker {
                     continue;
                 }
                 for (int y = r.minY(); y <= r.maxY(); y++) {
-                    countMaterial(world.getBlockType(x, y, z), c);
+                    // Chunk đã được kiểm tra isChunkLoaded ở trên, nên getBlockAt không tải thêm chunk.
+                    countMaterial(world.getBlockAt(x, y, z).getType(), c);
                 }
             }
         }
