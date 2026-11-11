@@ -1,3 +1,4 @@
+
 package com.horizon.ai.utils;
 
 import org.bukkit.configuration.file.FileConfiguration;
@@ -12,8 +13,8 @@ import java.util.Set;
 import java.util.logging.Logger;
 
 /**
- * Snapshot bất biến của config.yml. Mọi giá trị đều được đọc từ config và kẹp (clamp)
- * trong khoảng an toàn, không có ngưỡng nào bị hardcode trong logic.
+ * Snapshot bất biến của config.yml.
+ * Mọi giá trị đều được đọc từ config và kẹp trong khoảng an toàn.
  */
 public final class Settings {
 
@@ -30,6 +31,10 @@ public final class Settings {
     public final String aiModel;
     public final String aiEndpoint;
     public final String aiKeyEnv;
+
+    // API Key fallback từ config.yml
+    public final String aiApiKey;
+
     public final int aiIntervalSeconds;
     public final int aiMaxRequestsPerHour;
     public final int aiTimeoutSeconds;
@@ -94,114 +99,394 @@ public final class Settings {
     public final int retentionDays;
 
     public Settings(FileConfiguration c, Logger log) {
-        sampleIntervalTicks = clamp(c.getInt("monitoring.sample-interval-ticks", 40), 20, 1200);
-        historySize = clamp(c.getInt("monitoring.history-size", 720), 60, 10_000);
-        msptWarning = Math.max(1.0, c.getDouble("monitoring.mspt-warning", 45.0));
-        msptCritical = Math.max(msptWarning, c.getDouble("monitoring.mspt-critical", 60.0));
-        lagSpikeDelta = Math.max(1.0, c.getDouble("monitoring.lag-spike-delta", 15.0));
+
+        // ==================================================
+        // MONITORING
+        // ==================================================
+
+        sampleIntervalTicks = clamp(
+                c.getInt("monitoring.sample-interval-ticks", 40),
+                20, 1200
+        );
+
+        historySize = clamp(
+                c.getInt("monitoring.history-size", 720),
+                60, 10_000
+        );
+
+        msptWarning = Math.max(
+                1.0,
+                c.getDouble("monitoring.mspt-warning", 45.0)
+        );
+
+        msptCritical = Math.max(
+                msptWarning,
+                c.getDouble("monitoring.mspt-critical", 60.0)
+        );
+
+        lagSpikeDelta = Math.max(
+                1.0,
+                c.getDouble("monitoring.lag-spike-delta", 15.0)
+        );
+
+        // ==================================================
+        // AI
+        // ==================================================
 
         aiEnabled = c.getBoolean("ai.enabled", true);
-        aiProvider = c.getString("ai.provider", "openai").toLowerCase(Locale.ROOT);
-        aiModel = c.getString("ai.model", "gpt-4o-mini");
-        aiEndpoint = c.getString("ai.endpoint", "https://api.openai.com/v1/chat/completions");
-        aiKeyEnv = c.getString("ai.api-key-env", "HORIZONAI_AI_KEY");
-        aiApiKey = c.getString("ai.api-key", "");
-        aiIntervalSeconds = clamp(c.getInt("ai.analysis-interval-seconds", 300), 60, 86_400);
-        aiMaxRequestsPerHour = clamp(c.getInt("ai.max-requests-per-hour", 12), 1, 1000);
-        aiTimeoutSeconds = clamp(c.getInt("ai.timeout-seconds", 20), 3, 120);
-        aiMaxRetries = clamp(c.getInt("ai.max-retries", 2), 0, 5);
-        cbFailureThreshold = clamp(c.getInt("ai.circuit-breaker-failure-threshold", 3), 1, 50);
-        cbOpenSeconds = clamp(c.getInt("ai.circuit-breaker-open-seconds", 300), 10, 86_400);
-        aiReportLanguage = c.getString("ai.report-language", "vi");
 
-        rsThresholdEvents = clamp(c.getInt("redstone.detection-threshold-events-per-window", 400), 10, 1_000_000);
-        rsWindowSeconds = clamp(c.getInt("redstone.window-seconds", 10), 2, 300);
-        clusterDistance = clamp(c.getInt("redstone.cluster-distance", 2), 1, 8);
-        maxAnalyzedBlocks = clamp(c.getInt("redstone.max-analyzed-blocks", 2048), 64, 65_536);
-        maxTrackedMachines = clamp(c.getInt("redstone.max-tracked-machines", 256), 8, 4096);
-        sharedSourceMargin = clamp(c.getInt("redstone.shared-source-margin", 6), 1, 32);
-        minMsptCorrelationDelta = Math.max(0.0, c.getDouble("redstone.min-mspt-correlation-delta", 5.0));
-        minCorrelation = Math.max(0.1, Math.min(0.99, c.getDouble("redstone.min-correlation", 0.5)));
-        minSamples = clamp(c.getInt("redstone.min-samples", 12), 4, 120);
-        warningsBeforeIsolation = clamp(c.getInt("redstone.warnings-before-isolation", 2), 1, 20);
-        autoIsolate = c.getBoolean("redstone.auto-isolate", false);
-        isolationDelaySeconds = clamp(c.getInt("redstone.isolation-delay-seconds", 60), 0, 3600);
-        boundaryScanRadius = clamp(c.getInt("redstone.boundary-scan-radius", 24), 4, 64);
-        clockMinFrequencyHz = Math.max(0.1, c.getDouble("redstone.clock-min-frequency-hz", 2.0));
-        clockMaxIntervalCv = Math.max(0.01, c.getDouble("redstone.clock-max-interval-cv", 0.25));
+        aiProvider = c.getString(
+                "ai.provider", "openai"
+        ).toLowerCase(Locale.ROOT);
 
-        warnDistance = clamp(c.getInt("redstone.warning.distance", 32), 4, 256);
-        warnCooldownSeconds = clamp(c.getInt("redstone.warning.cooldown-seconds", 120), 5, 3600);
-        preferActivator = c.getBoolean("redstone.warning.prefer-activator", true);
+        aiModel = c.getString(
+                "ai.model", "gpt-4o-mini"
+        );
 
-        chunkEntityWarning = clamp(c.getInt("entity.chunk-entity-warning", 120), 10, 100_000);
-        densityRadius = clamp(c.getInt("entity.density-radius", 16), 4, 64);
-        densityWarning = clamp(c.getInt("entity.density-warning", 80), 5, 100_000);
-        itemOverflowWarning = clamp(c.getInt("entity.item-overflow-warning", 300), 10, 100_000);
+        aiEndpoint = c.getString(
+                "ai.endpoint",
+                "https://api.openai.com/v1/chat/completions"
+        );
+
+        // Tên Environment Variable
+        aiKeyEnv = c.getString(
+                "ai.api-key-env",
+                "HORIZONAI_AI_KEY"
+        );
+
+        // API Key dự phòng từ config.yml
+        aiApiKey = c.getString(
+                "ai.api-key",
+                ""
+        );
+
+        aiIntervalSeconds = clamp(
+                c.getInt("ai.analysis-interval-seconds", 300),
+                60, 86_400
+        );
+
+        aiMaxRequestsPerHour = clamp(
+                c.getInt("ai.max-requests-per-hour", 12),
+                1, 1000
+        );
+
+        aiTimeoutSeconds = clamp(
+                c.getInt("ai.timeout-seconds", 20),
+                3, 120
+        );
+
+        aiMaxRetries = clamp(
+                c.getInt("ai.max-retries", 2),
+                0, 5
+        );
+
+        cbFailureThreshold = clamp(
+                c.getInt("ai.circuit-breaker-failure-threshold", 3),
+                1, 50
+        );
+
+        cbOpenSeconds = clamp(
+                c.getInt("ai.circuit-breaker-open-seconds", 300),
+                10, 86_400
+        );
+
+        aiReportLanguage = c.getString(
+                "ai.report-language", "vi"
+        );
+
+        // ==================================================
+        // REDSTONE
+        // ==================================================
+
+        rsThresholdEvents = clamp(
+                c.getInt("redstone.detection-threshold-events-per-window", 400),
+                10, 1_000_000
+        );
+
+        rsWindowSeconds = clamp(
+                c.getInt("redstone.window-seconds", 10),
+                2, 300
+        );
+
+        clusterDistance = clamp(
+                c.getInt("redstone.cluster-distance", 2),
+                1, 8
+        );
+
+        maxAnalyzedBlocks = clamp(
+                c.getInt("redstone.max-analyzed-blocks", 2048),
+                64, 65_536
+        );
+
+        maxTrackedMachines = clamp(
+                c.getInt("redstone.max-tracked-machines", 256),
+                8, 4096
+        );
+
+        sharedSourceMargin = clamp(
+                c.getInt("redstone.shared-source-margin", 6),
+                1, 32
+        );
+
+        minMsptCorrelationDelta = Math.max(
+                0.0,
+                c.getDouble("redstone.min-mspt-correlation-delta", 5.0)
+        );
+
+        minCorrelation = Math.max(
+                0.1,
+                Math.min(0.99, c.getDouble("redstone.min-correlation", 0.5))
+        );
+
+        minSamples = clamp(
+                c.getInt("redstone.min-samples", 12),
+                4, 120
+        );
+
+        warningsBeforeIsolation = clamp(
+                c.getInt("redstone.warnings-before-isolation", 2),
+                1, 20
+        );
+
+        autoIsolate = c.getBoolean(
+                "redstone.auto-isolate", false
+        );
+
+        isolationDelaySeconds = clamp(
+                c.getInt("redstone.isolation-delay-seconds", 60),
+                0, 3600
+        );
+
+        boundaryScanRadius = clamp(
+                c.getInt("redstone.boundary-scan-radius", 24),
+                4, 64
+        );
+
+        clockMinFrequencyHz = Math.max(
+                0.1,
+                c.getDouble("redstone.clock-min-frequency-hz", 2.0)
+        );
+
+        clockMaxIntervalCv = Math.max(
+                0.01,
+                c.getDouble("redstone.clock-max-interval-cv", 0.25)
+        );
+
+        // ==================================================
+        // REDSTONE WARNING
+        // ==================================================
+
+        warnDistance = clamp(
+                c.getInt("redstone.warning.distance", 32),
+                4, 256
+        );
+
+        warnCooldownSeconds = clamp(
+                c.getInt("redstone.warning.cooldown-seconds", 120),
+                5, 3600
+        );
+
+        preferActivator = c.getBoolean(
+                "redstone.warning.prefer-activator", true
+        );
+
+        // ==================================================
+        // ENTITY
+        // ==================================================
+
+        chunkEntityWarning = clamp(
+                c.getInt("entity.chunk-entity-warning", 120),
+                10, 100_000
+        );
+
+        densityRadius = clamp(
+                c.getInt("entity.density-radius", 16),
+                4, 64
+        );
+
+        densityWarning = clamp(
+                c.getInt("entity.density-warning", 80),
+                5, 100_000
+        );
+
+        itemOverflowWarning = clamp(
+                c.getInt("entity.item-overflow-warning", 300),
+                10, 100_000
+        );
+
         mobThresholds = new HashMap<>();
+
         if (c.isConfigurationSection("entity.mob-thresholds")) {
-            for (String k : c.getConfigurationSection("entity.mob-thresholds").getKeys(false)) {
-                mobThresholds.put(k.toUpperCase(Locale.ROOT), Math.max(1, c.getInt("entity.mob-thresholds." + k, 50)));
+            for (String k : c.getConfigurationSection(
+                    "entity.mob-thresholds"
+            ).getKeys(false)) {
+
+                mobThresholds.put(
+                        k.toUpperCase(Locale.ROOT),
+                        Math.max(
+                                1,
+                                c.getInt("entity.mob-thresholds." + k, 50)
+                        )
+                );
             }
         }
-        chunkHopperWarning = clamp(c.getInt("hopper.chunk-hopper-warning", 200), 10, 100_000);
-        hopperTransfersPerSecondWarning = clamp(c.getInt("hopper.transfers-per-second-warning", 40), 1, 100_000);
-        chunkAnalysisEnabled = c.getBoolean("chunk.analysis-enabled", true);
-        chunksPerCycle = clamp(c.getInt("chunk.chunks-per-cycle", 16), 1, 256);
-        activeChunkWarning = clamp(c.getInt("chunk.active-chunk-warning", 64), 4, 10_000);
 
-        // suggestions-only luôn được coi là true cho các thay đổi làm đổi world/inventory
-        suggestionsOnly = c.getBoolean("optimization.suggestions-only", true);
-        autoActions = upperSet(c.getStringList("optimization.auto-whitelist-actions"));
-        approvalActions = upperSet(c.getStringList("optimization.admin-approval-actions"));
+        // ==================================================
+        // HOPPER
+        // ==================================================
 
-        adminAlertEnabled = c.getBoolean("admin-alert.enabled", true);
-        adminAlertMinLevel = Severity.parse(c.getString("admin-alert.min-level", "HIGH"), Severity.HIGH);
-        adminAlertCooldownSeconds = clamp(c.getInt("admin-alert.cooldown-seconds", 600), 30, 86_400);
+        chunkHopperWarning = clamp(
+                c.getInt("hopper.chunk-hopper-warning", 200),
+                10, 100_000
+        );
 
-        whitelistWorlds = new HashSet<>(c.getStringList("whitelist.worlds"));
+        hopperTransfersPerSecondWarning = clamp(
+                c.getInt("hopper.transfers-per-second-warning", 40),
+                1, 100_000
+        );
+
+        // ==================================================
+        // CHUNK
+        // ==================================================
+
+        chunkAnalysisEnabled = c.getBoolean(
+                "chunk.analysis-enabled", true
+        );
+
+        chunksPerCycle = clamp(
+                c.getInt("chunk.chunks-per-cycle", 16),
+                1, 256
+        );
+
+        activeChunkWarning = clamp(
+                c.getInt("chunk.active-chunk-warning", 64),
+                4, 10_000
+        );
+
+        // ==================================================
+        // OPTIMIZATION
+        // ==================================================
+
+        suggestionsOnly = c.getBoolean(
+                "optimization.suggestions-only", true
+        );
+
+        autoActions = upperSet(
+                c.getStringList("optimization.auto-whitelist-actions")
+        );
+
+        approvalActions = upperSet(
+                c.getStringList("optimization.admin-approval-actions")
+        );
+
+        // ==================================================
+        // ADMIN ALERT
+        // ==================================================
+
+        adminAlertEnabled = c.getBoolean(
+                "admin-alert.enabled", true
+        );
+
+        adminAlertMinLevel = Severity.parse(
+                c.getString("admin-alert.min-level", "HIGH"),
+                Severity.HIGH
+        );
+
+        adminAlertCooldownSeconds = clamp(
+                c.getInt("admin-alert.cooldown-seconds", 600),
+                30, 86_400
+        );
+
+        // ==================================================
+        // WHITELIST
+        // ==================================================
+
+        whitelistWorlds = new HashSet<>(
+                c.getStringList("whitelist.worlds")
+        );
+
         whitelistRegions = new ArrayList<>();
+
         for (String raw : c.getStringList("whitelist.regions")) {
+
             Region r = Region.parse(raw);
+
             if (r == null) {
-                log.warning("[HorizonAI] Bỏ qua vùng whitelist không hợp lệ: " + raw);
+                log.warning(
+                        "[HorizonAI] Bỏ qua vùng whitelist không hợp lệ: " + raw
+                );
             } else {
                 whitelistRegions.add(r);
             }
         }
+
         excludedPlayers = new HashSet<>();
+
         for (String p : c.getStringList("whitelist.excluded-players")) {
-            excludedPlayers.add(p.toLowerCase(Locale.ROOT));
+            excludedPlayers.add(
+                    p.toLowerCase(Locale.ROOT)
+            );
         }
 
-        auditEnabled = c.getBoolean("logging.audit-enabled", true);
-        debug = c.getBoolean("logging.debug", false);
-        databaseFile = c.getString("database.file", "horizonai.db");
-        retentionDays = clamp(c.getInt("database.retention-days", 14), 1, 365);
+        // ==================================================
+        // LOGGING / DATABASE
+        // ==================================================
+
+        auditEnabled = c.getBoolean(
+                "logging.audit-enabled", true
+        );
+
+        debug = c.getBoolean(
+                "logging.debug", false
+        );
+
+        databaseFile = c.getString(
+                "database.file", "horizonai.db"
+        );
+
+        retentionDays = clamp(
+                c.getInt("database.retention-days", 14),
+                1, 365
+        );
     }
 
     public boolean isWorldWhitelisted(String world) {
         return whitelistWorlds.contains(world);
     }
 
-    public boolean isInWhitelistedRegion(String world, int x, int y, int z) {
+    public boolean isInWhitelistedRegion(
+            String world,
+            int x,
+            int y,
+            int z
+    ) {
+
         for (Region r : whitelistRegions) {
+
             if (r.contains(world, x, y, z)) {
                 return true;
             }
         }
+
         return false;
     }
 
     public boolean isPlayerExcluded(String name) {
-        return excludedPlayers.contains(name.toLowerCase(Locale.ROOT));
+        return excludedPlayers.contains(
+                name.toLowerCase(Locale.ROOT)
+        );
     }
 
     private static Set<String> upperSet(List<String> in) {
+
         Set<String> out = new HashSet<>();
+
         for (String s : in) {
-            out.add(s.trim().toUpperCase(Locale.ROOT));
+            out.add(
+                    s.trim().toUpperCase(Locale.ROOT)
+            );
         }
+
         return out;
     }
 
