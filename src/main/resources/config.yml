@@ -1,0 +1,145 @@
+# ==========================================================
+#  HorizonAI Optimizer - config.yml
+#  Mọi ngưỡng đều có thể tùy chỉnh. Không có API key trong file này.
+# ==========================================================
+
+language: vi
+
+monitoring:
+  # Chu kỳ lấy mẫu TPS/MSPT/RAM (tick). 20 tick = 1 giây.
+  sample-interval-ticks: 40
+  # Số mẫu lưu trong lịch sử hiệu suất (mỗi mẫu = 1 lần lấy mẫu).
+  history-size: 720
+  # Ngưỡng MSPT (ms) để coi là nguy cơ. 50ms = 20 TPS.
+  mspt-warning: 45.0
+  mspt-critical: 60.0
+  # Ngưỡng tăng đột ngột MSPT so với baseline (ms) để báo Lag Spike.
+  lag-spike-delta: 15.0
+
+ai:
+  enabled: true
+  # Provider hiện hỗ trợ: openai (hoặc bất kỳ API tương thích OpenAI Chat Completions)
+  provider: openai
+  model: gpt-4o-mini
+  # Endpoint đầy đủ. Ví dụ với provider tương thích khác: https://api.example.com/v1/chat/completions
+  endpoint: https://api.openai.com/v1/chat/completions
+  # TÊN biến môi trường chứa API key. KHÔNG ghi key trực tiếp vào file này.
+  api-key-env: HORIZONAI_AI_KEY
+  # Khoảng thời gian giữa 2 lần phân tích AI (giây). Không gọi AI theo từng tick.
+  analysis-interval-seconds: 300
+  # Giới hạn request AI mỗi giờ để tránh tốn chi phí.
+  max-requests-per-hour: 12
+  timeout-seconds: 20
+  max-retries: 2
+  # Circuit breaker: sau N lỗi liên tiếp, tạm ngưng gọi AI trong X giây.
+  circuit-breaker-failure-threshold: 3
+  circuit-breaker-open-seconds: 300
+  # Ngôn ngữ báo cáo AI trả về.
+  report-language: vi
+
+redstone:
+  # Số sự kiện Redstone tối thiểu trong một cửa sổ để một cụm được xem xét.
+  detection-threshold-events-per-window: 400
+  # Cửa sổ thống kê (giây).
+  window-seconds: 10
+  # Khoảng cách tối đa (block) để hai điểm hoạt động được gộp vào cùng một máy.
+  cluster-distance: 2
+  # Số block hoạt động tối đa được ghi nhận/phân tích mỗi chu kỳ (giới hạn tải).
+  max-analyzed-blocks: 2048
+  # Số máy tối đa được theo dõi cùng lúc (giới hạn bộ nhớ).
+  max-tracked-machines: 256
+  # Nếu cụm chạm/gần cụm khác trong khoảng này, đánh dấu "không xác định ranh giới" và KHÔNG cách ly.
+  shared-source-margin: 6
+  # Điều kiện bắt buộc để coi máy là nguyên nhân (phải có tương quan MSPT):
+  # MSPT tăng tối thiểu (ms) so với baseline trong lúc máy hoạt động.
+  min-mspt-correlation-delta: 5.0
+  # Hệ số Pearson tối thiểu giữa activity và MSPT để coi là có tương quan.
+  min-correlation: 0.5
+  # Số cặp mẫu (activity, MSPT) tối thiểu trước khi được kết luận. Thiếu mẫu = không kết luận.
+  min-samples: 12
+  # Số lần cảnh báo Level 1 trước khi xét Level 2.
+  warnings-before-isolation: 2
+  # Tự động cách ly Level 2 khi đủ điều kiện. Nếu false: chờ Admin duyệt.
+  auto-isolate: false
+  # Trì hoãn (giây) giữa khi xác nhận và khi cách ly, để Admin có thời gian can thiệp.
+  isolation-delay-seconds: 60
+  # Số block được quét quanh máy khi tìm ranh giới (giới hạn cố định, không quét cả chunk).
+  boundary-scan-radius: 24
+  # Mật độ hoạt động (sự kiện/giây/block) để xem là clock. Dùng khi phân tích chu kỳ.
+  clock-min-frequency-hz: 2.0
+  clock-max-interval-cv: 0.25
+
+  warning:
+    # Khoảng cách (block) tính từ máy để gửi cảnh báo riêng.
+    distance: 32
+    # Thời gian chờ (giây) giữa 2 cảnh báo cho cùng một máy.
+    cooldown-seconds: 120
+    # Chỉ gửi cho người chơi hoạt động gần máy nhất (ưu tiên người kích hoạt).
+    prefer-activator: true
+
+entity:
+  # Số entity tối đa trong một chunk trước khi cảnh báo (không tự xóa).
+  chunk-entity-warning: 120
+  # Mật độ entity trong bán kính 16 block quanh một điểm.
+  density-radius: 16
+  density-warning: 80
+  # Item rơi tối đa trong chunk trước khi cảnh báo Item Overflow.
+  item-overflow-warning: 300
+  # Loại mob có ngưỡng riêng cho Mob Farm Analyzer.
+  mob-thresholds:
+    ZOMBIE: 60
+    SKELETON: 60
+    VILLAGER: 40
+    ZOMBIE_VILLAGER: 30
+  # Không bao giờ tự xóa entity của người chơi (Admin phải phê duyệt).
+  auto-remove-entities: false
+
+hopper:
+  # Số hopper tối đa trong một chunk trước khi cảnh báo.
+  chunk-hopper-warning: 200
+  # Số lượt chuyển item/giây từ hopper trước khi coi là hoạt động liên tục.
+  transfers-per-second-warning: 40
+
+chunk:
+  analysis-enabled: true
+  # Số chunk tối đa được đánh giá mỗi chu kỳ (incremental scan).
+  chunks-per-cycle: 16
+  # Tỉ lệ "chunk nóng": số lượng chunk hoạt động vượt mức này sẽ được gắn cờ.
+  active-chunk-warning: 64
+
+optimization:
+  # Đề xuất tối ưu trong báo cáo. Hệ thống KHÔNG tự thực hiện các thay đổi này.
+  suggestions-only: true
+  # Các hành động được phép tự động. AI KHÔNG được thêm hành động vào danh sách này.
+  auto-whitelist-actions:
+    - WARN_PLAYER
+    - NOTIFY_ADMIN
+  # Hành động cần Admin xác nhận, không bao giờ tự động.
+  admin-approval-actions:
+    - ISOLATE_MACHINE
+    - RESTORE_MACHINE
+
+admin-alert:
+  # Gửi thông báo cho người có quyền horizonai.use khi đạt mức HIGH/CRITICAL.
+  enabled: true
+  min-level: HIGH
+  cooldown-seconds: 600
+
+whitelist:
+  worlds: []
+  # Vùng không bị phân tích/cách ly. Định dạng: world;minX;minY;minZ;maxX;maxY;maxZ
+  regions: []
+  # Người chơi không nhận cảnh báo Redstone (UUID hoặc tên).
+  excluded-players: []
+
+logging:
+  # Ghi log mọi thao tác cách ly/khôi phục vào bảng audit_log.
+  audit-enabled: true
+  # Ghi log chi tiết mỗi lần phân tích (debug).
+  debug: false
+
+database:
+  # File SQLite nằm trong thư mục plugin.
+  file: horizonai.db
+  # Số ngày giữ lại dữ liệu lịch sử.
+  retention-days: 14

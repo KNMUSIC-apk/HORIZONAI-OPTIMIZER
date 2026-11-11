@@ -1,0 +1,46 @@
+name: HorizonAI
+main: com.horizon.ai.HorizonAI
+version: 1.0.0
+api-version: '1.21'
+author: HorizonAI
+description: AI-assisted Paper/Purpur performance guard with reversible Redstone isolation.
+
+libraries:
+  - com.fasterxml.jackson.core:jackson-databind:2.18.2
+  - org.xerial:sqlite-jdbc:3.47.1.0
+
+commands:
+  horizonai:
+    description: HorizonAI main command
+    aliases: [hai]
+    usage: /<command> [status|analyze|report|redstone|optimize|history|whitelist|reload]
+    permission: horizonai.use
+
+permissions:
+  horizonai.use:
+    description: View HorizonAI status
+    default: op
+  horizonai.admin:
+    description: Full HorizonAI administration (parent of all horizonai.* nodes)
+    default: op
+    children:
+      horizonai.use: true
+      horizonai.redstone.isolate: true
+      horizonai.redstone.restore: true
+      horizonai.whitelist: true
+      horizonai.reload: true
+  horizonai.redstone.isolate:
+    description: Approve or force isolation of a Redstone machine
+    default: op
+  horizonai.redstone.restore:
+    description: Restore an isolated Redstone machine
+    default: op
+  horizonai.whitelist:
+    description: Manage whitelisted regions
+    default: op
+  horizonai.reload:
+    description: Reload configuration
+    default: op
+  horizonai.notify.exclude:
+    description: Never receive HorizonAI Redstone warnings
+    default: false
