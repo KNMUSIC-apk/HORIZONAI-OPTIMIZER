@@ -1,5 +1,6 @@
 package com.horizon.ai.redstone;
 
+import com.horizon.ai.lut.LUTResult;
 import com.horizon.ai.utils.Region;
 import com.horizon.ai.utils.Severity;
 
@@ -66,6 +67,8 @@ public final class Machine {
     public List<String> evidence = List.of();
     public String builderName;
     public String activatorName;
+    /** Kết quả LUT gần nhất (null nếu chưa phân tích). Chỉ đọc/ghi trên Main Thread. */
+    public LUTResult lastLut;
 
     public Machine(String id, String world, Region region, long nowMillis) {
         this.id = id;

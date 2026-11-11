@@ -3,17 +3,15 @@ package com.horizon.ai.optimizer;
 import com.horizon.ai.redstone.MachineTracker;
 import com.horizon.ai.utils.Settings;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
 /**
- * Cổng kiểm soát mọi đề xuất hành động (từ AI hoặc bộ phân tích cục bộ).
+ * Cổng kiểm soát mọi đề xuất hành động từ Bộ phân tích LUT trước khi thực thi.
  *
  * Quy tắc:
- *  - Chỉ hành động có trong optimization.auto-whitelist-actions mới được tự động thực hiện.
- *  - Cách ly (ISOLATE) và khôi phục (RESTORE) KHÔNG BAO GIỜ được AI kích hoạt trực tiếp:
- *    ISOLATE chỉ được xếp hàng chờ Admin hoặc để luật cục bộ quyết định, RESTORE chỉ dành cho Admin.
+ *  - Cách ly (ISOLATE) luôn được xếp hàng chờ Admin. Việc tự cách ly, nếu được cấu hình, do
+ *    Machine decision engine quyết định sau khi đã qua mọi cổng bằng chứng, không qua đường này.
+ *  - Khôi phục (RESTORE) chỉ dành cho thao tác trực tiếp của Admin.
  *  - Hành động tham chiếu máy phải tồn tại trong registry.
  */
 public final class ActionValidator {
@@ -22,7 +20,7 @@ public final class ActionValidator {
 
     public enum Decision { EXECUTE, QUEUE_FOR_ADMIN, SUGGEST_ONLY, REJECT }
 
-    /** Đề xuất thô, có thể đến từ JSON của AI nên type vẫn là chuỗi. */
+    /** Đề xuất hành động. type là chuỗi để có thể đọc từ config hoặc lệnh. */
     public record ProposedAction(String type, String machineId, String reason) {
     }
 
@@ -37,18 +35,7 @@ public final class ActionValidator {
         this.tracker = tracker;
     }
 
-    public List<Result> validateAll(List<ProposedAction> actions, boolean fromAi) {
-        List<Result> out = new ArrayList<>();
-        if (actions == null) {
-            return out;
-        }
-        for (ProposedAction a : actions) {
-            out.add(validate(a, fromAi));
-        }
-        return out;
-    }
-
-    public Result validate(ProposedAction a, boolean fromAi) {
+    public Result validate(ProposedAction a) {
         if (a == null || a.type() == null) {
             return new Result(a, Decision.REJECT, "Thiếu loại hành động");
         }
@@ -57,10 +44,6 @@ public final class ActionValidator {
             type = ActionType.valueOf(a.type().trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             return new Result(a, Decision.REJECT, "Loại hành động không được hỗ trợ: " + a.type());
-        }
-
-        if (fromAi && type == ActionType.RESTORE_MACHINE) {
-            return new Result(a, Decision.REJECT, "AI không được phép khôi phục máy");
         }
 
         boolean needsMachine = type == ActionType.WARN_PLAYER || type == ActionType.ISOLATE_MACHINE

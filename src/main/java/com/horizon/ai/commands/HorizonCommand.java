@@ -1,7 +1,11 @@
 package com.horizon.ai.commands;
 
 import com.horizon.ai.HorizonAI;
-import com.horizon.ai.analyzer.HealthReport;
+import com.horizon.ai.lut.LUTProfile;
+import com.horizon.ai.lut.LUTReportBuilder;
+import com.horizon.ai.lut.LUTResult;
+import com.horizon.ai.lut.LUTThresholds;
+import com.horizon.ai.lut.LUTWeights;
 import com.horizon.ai.performance.PerfSample;
 import com.horizon.ai.redstone.Machine;
 import com.horizon.ai.redstone.MachineIsolation;
@@ -16,16 +20,21 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /** /horizonai và các subcommand. Mọi lệnh đều kiểm tra permission riêng. Chạy trên Main Thread. */
 public final class HorizonCommand implements CommandExecutor, TabCompleter {
 
-    private static final List<String> SUB = List.of("status", "analyze", "report", "redstone", "optimize",
+    private static final List<String> SUB = List.of("status", "lut", "analyze", "report", "redstone", "optimize",
             "history", "whitelist", "reload");
+    private static final List<String> LUT_SUB = List.of("status", "analyze", "profile", "reload");
     private static final List<String> REDSTONE_SUB = List.of("list", "inspect", "isolate", "restore");
+    private static final int MAX_DETAILED_REPORTS = 5;
 
     private final HorizonAI plugin;
 
@@ -42,6 +51,7 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
         String sub = args.length == 0 ? "status" : args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
             case "status" -> status(sender);
+            case "lut" -> lut(sender, args);
             case "analyze" -> analyze(sender);
             case "report" -> report(sender);
             case "redstone" -> redstone(sender, args);
@@ -81,37 +91,167 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§7Máy theo dõi: §f" + plugin.tracker().size() + " §7| Cảnh báo: §e" + warned
                 + " §7| Đang cách ly: §c" + isolated + " §7| Hành động bị chặn: §f"
                 + plugin.isolation().blockedActions());
-        s.sendMessage("§7Lag spike: §f" + plugin.perf().spikeCount() + " §7| Trạng thái AI: §f" + plugin.ai().statusLabel());
+        s.sendMessage("§7Lag spike: §f" + plugin.perf().spikeCount()
+                + " §7| LUT: §f" + (plugin.settings().lutEnabled ? "bật" : "tắt") + " §7(cục bộ, không cần API)");
     }
 
+    private void lut(CommandSender s, String[] args) {
+        String action = args.length < 2 ? "status" : args[1].toLowerCase(Locale.ROOT);
+        switch (action) {
+            case "status" -> lutStatus(s);
+            case "analyze" -> analyze(s);
+            case "profile" -> lutProfile(s);
+            case "reload" -> {
+                if (!s.hasPermission("horizonai.reload")) {
+                    s.sendMessage(Text.noPermission());
+                    return;
+                }
+                plugin.reloadHorizon();
+                s.sendMessage("§aĐã tải lại cấu hình LUT. Các máy đang cách ly vẫn được giữ nguyên.");
+                plugin.db().audit(s.getName(), "LUT_RELOAD", null, "lut profile reloaded");
+            }
+            default -> s.sendMessage("§cCú pháp: /horizonai lut <status|analyze|profile|reload>");
+        }
+    }
+
+    private void lutStatus(CommandSender s) {
+        LUTProfile p = plugin.lut().profile();
+        s.sendMessage("§6§l=== Advanced Machine LUT ===");
+        s.sendMessage("§7Trạng thái: §f" + (plugin.settings().lutEnabled ? "BẬT" : "TẮT")
+                + " §7| Chế độ: §fcục bộ, deterministic, không cần API key hay Internet");
+        int analyzed = 0;
+        int warned = 0;
+        int isolated = 0;
+        for (Machine m : plugin.tracker().all()) {
+            if (m.lastLut != null) {
+                analyzed++;
+            }
+            if (m.state == Machine.State.ISOLATED) {
+                isolated++;
+            } else if (m.state == Machine.State.WARNED || m.state == Machine.State.PENDING_ISOLATION) {
+                warned++;
+            }
+        }
+        s.sendMessage("§7Máy theo dõi: §f" + plugin.tracker().size() + " §7| Đã phân tích: §f" + analyzed
+                + " §7| Cảnh báo/chờ: §e" + warned + " §7| Cách ly: §c" + isolated);
+        s.sendMessage("§7Tự cách ly: §f" + (p.safety().autoIsolationAllowed() ? "CHO PHÉP" : "TẮT (Admin duyệt)"));
+        int shown = 0;
+        for (Machine m : tracked()) {
+            if (shown++ >= 20) {
+                s.sendMessage("§8... còn máy khác, dùng /horizonai redstone list");
+                break;
+            }
+            s.sendMessage(String.format(Locale.ROOT, "§e%s §7%s %s%s §7| điểm %s §8(%s)",
+                    m.id, m.state, Text.severityColor(m.severity), m.severity,
+                    m.lastLut == null ? "-" : String.valueOf(m.lastLut.score().total()), m.world));
+        }
+    }
+
+    private void lutProfile(CommandSender s) {
+        LUTProfile p = plugin.lut().profile();
+        LUTWeights w = p.weights();
+        LUTThresholds t = p.thresholds();
+        s.sendMessage("§6§l=== Hồ sơ chấm điểm LUT ===");
+        s.sendMessage(String.format(Locale.ROOT,
+                "§7Tỉ lệ sự kiện/baseline: §f%.1fx→+%d, %.1fx→+%d, %.1fx→+%d",
+                t.eventRateLow(), w.eventRateLowPoints(), t.eventRateMedium(), w.eventRateMediumPoints(),
+                t.eventRateHigh(), w.eventRateHighPoints()));
+        s.sendMessage(String.format(Locale.ROOT,
+                "§7ΔMSPT: §f1x=%.1fms→+%d, 2x→+%d, 3x→+%d §7| MSPT nguy hiểm %.0f ms→+%d",
+                t.msptDeltaMinimum(), w.msptDeltaLowPoints(), w.msptDeltaMediumPoints(), w.msptDeltaHighPoints(),
+                t.criticalMspt(), w.criticalMsptPoints()));
+        s.sendMessage(String.format(Locale.ROOT,
+                "§7Clock ổn định: §f+%d §7| Pearson ≥ §f%.2f §7→ +%d",
+                w.stableClockPoints(), t.correlationMinimum(), w.correlationPoints()));
+        s.sendMessage(String.format(Locale.ROOT,
+                "§7Điểm rủi ro: §fNORMAL 0-24 · LOW 25-%d · MEDIUM %d-%d · HIGH %d-%d · CRITICAL %d-100",
+                t.warningScore() - 1, t.warningScore(), t.highScore() - 1, t.highScore(), t.criticalScore() - 1,
+                t.criticalScore()));
+        s.sendMessage(String.format(Locale.ROOT,
+                "§7Đủ mẫu ≥ §f%d §7| Lịch sử §f%d §7| Độ tin cậy tối thiểu §f%.2f §7| Clock ≥ §f%.2f Hz, CV ≤ %.2f",
+                t.minSamples(), t.historySize(), t.minimumConfidence(), t.clockMinFrequencyHz(), t.clockMaxIntervalCv()));
+        s.sendMessage("§7An toàn: §ftương quan, ranh giới rõ, quét đầy đủ luôn bắt buộc §7| Admin duyệt: §f"
+                + (p.safety().requireAdminApproval() ? "BẮT BUỘC" : "không bắt buộc")
+                + " §7| Tự cách ly: §f" + (p.safety().autoIsolationAllowed() ? "BẬT" : "TẮT"));
+        s.sendMessage(String.format(Locale.ROOT,
+                "§7Giới hạn mỗi cửa sổ: §f%d máy §7| §f%.1f ms §7| Điểm nhóm: cường độ 10, hoạt động 22, clock 12, hiệu năng 30, tương quan 10, cấu tạo 4, đồng thời 4, ổn định 8",
+                p.maxMachinesPerWindow(), p.maxAnalysisMsPerWindow()));
+    }
+
+    /** Báo cáo chi tiết các máy có điểm cao nhất (tối đa MAX_DETAILED_REPORTS). Chỉ đọc kết quả LUT gần nhất. */
     private void analyze(CommandSender s) {
+        LUTThresholds t = plugin.lut().profile().thresholds();
         PerfSample p = plugin.perf().latest();
-        HealthReport local = plugin.local().build(p, plugin.tracker(), plugin.perf().isSpiking());
-        printReport(s, local);
-        if (!plugin.ai().isEnabled()) {
-            s.sendMessage("§7AI đang tắt hoặc chưa có API key: chỉ hiển thị phân tích cục bộ.");
+        double mspt = p == null ? 0.0 : p.mspt();
+        LUTReportBuilder.ServerView view = serverView(mspt);
+        s.sendMessage("§6§l=== Báo cáo HorizonAI LUT ===");
+        for (String line : LUTReportBuilder.serverSummary(view)) {
+            s.sendMessage("§7" + line);
+        }
+        List<Machine> ranked = new ArrayList<>();
+        for (Machine m : tracked()) {
+            if (m.lastLut != null) {
+                ranked.add(m);
+            }
+        }
+        if (ranked.isEmpty()) {
+            s.sendMessage("§7Chưa có máy nào được phân tích. Hãy đợi vài cửa sổ thời gian.");
             return;
         }
-        s.sendMessage("§7Đang gọi AI phân tích snapshot...");
-        plugin.ai().analyze(plugin.guardian().snapshotForAi(System.currentTimeMillis()))
-                .thenAccept(opt -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (opt.isEmpty()) {
-                        s.sendMessage("§eAI không trả kết quả (giới hạn tần suất, lỗi mạng hoặc circuit breaker). Xem console.");
-                        return;
-                    }
-                    printReport(s, opt.get());
-                    plugin.guardian().onAiReport(opt.get());
-                }));
+        ranked.sort(Comparator.comparingInt((Machine m) -> m.lastLut.score().total()).reversed());
+        int shown = 0;
+        for (Machine m : ranked) {
+            if (shown++ >= MAX_DETAILED_REPORTS) {
+                s.sendMessage("§8... còn " + (ranked.size() - MAX_DETAILED_REPORTS)
+                        + " máy, dùng /horizonai redstone inspect <id>");
+                break;
+            }
+            LUTResult r = m.lastLut;
+            for (String line : LUTReportBuilder.machineReport(r, t)) {
+                s.sendMessage("§7" + line);
+            }
+            s.sendMessage("§8----");
+        }
     }
 
+    /** Tóm tắt một dòng cho mỗi máy. */
     private void report(CommandSender s) {
-        printReport(s, plugin.local().build(plugin.perf().latest(), plugin.tracker(), plugin.perf().isSpiking()));
+        PerfSample p = plugin.perf().latest();
+        s.sendMessage("§6§l=== Tóm tắt HorizonAI ===");
+        for (String line : LUTReportBuilder.serverSummary(serverView(p == null ? 0.0 : p.mspt()))) {
+            s.sendMessage("§7" + line);
+        }
+        if (plugin.tracker().size() == 0) {
+            s.sendMessage("§7Chưa có máy nào được theo dõi.");
+            return;
+        }
+        for (Machine m : tracked()) {
+            if (m.lastLut == null) {
+                s.sendMessage("§e" + m.id + " §7chưa phân tích");
+                continue;
+            }
+            LUTResult r = m.lastLut;
+            s.sendMessage(String.format(Locale.ROOT, "§e%s %s%s §7| điểm %d/100 | độ tin cậy %.2f | %s",
+                    m.id, Text.severityColor(r.severity()), r.severity(), r.score().total(), r.confidence(),
+                    LUTReportBuilder.decisionLabel(r)));
+        }
     }
 
+    /** Đề xuất tổng hợp, không duplicate, lấy từ kết quả LUT gần nhất. Chỉ đề xuất, không tự thay đổi cấu hình. */
     private void optimize(CommandSender s) {
-        HealthReport r = plugin.local().build(plugin.perf().latest(), plugin.tracker(), plugin.perf().isSpiking());
+        LUTThresholds t = plugin.lut().profile().thresholds();
+        Set<String> recs = new LinkedHashSet<>();
+        for (Machine m : tracked()) {
+            if (m.lastLut != null) {
+                recs.addAll(LUTReportBuilder.recommendations(m.lastLut, t));
+            }
+        }
         s.sendMessage("§6§l=== Đề xuất tối ưu (chỉ đề xuất, không tự thay đổi) ===");
-        for (String rec : r.recommendations()) {
+        if (recs.isEmpty()) {
+            s.sendMessage("§7Chưa có đề xuất. Hãy đợi vài cửa sổ thời gian.");
+            return;
+        }
+        for (String rec : recs) {
             s.sendMessage("§7- §f" + rec);
         }
     }
@@ -173,8 +313,9 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§7Trạng thái: §f" + m.state + " §7| Mức: " + Text.severityColor(m.severity) + m.severity
                 + " §7| Tương quan: §f" + (m.correlated ? "CÓ" : "KHÔNG")
                 + " §7| Đủ điều kiện cách ly: §f" + (m.eligible ? "CÓ" : "KHÔNG"));
-        s.sendMessage(String.format(Locale.ROOT, "§7Độ tin cậy: §f%.0f%% §7| Sự kiện tổng: §f%d §7| Số lần cách ly: §f%d",
-                m.confidence * 100, m.totalEvents, m.isolationCount));
+        s.sendMessage(String.format(Locale.ROOT, "§7Điểm LUT: §f%s/100 §7| Độ tin cậy: §f%.2f §7| Sự kiện tổng: §f%d §7| Số lần cách ly: §f%d",
+                m.lastLut == null ? "-" : String.valueOf(m.lastLut.score().total()),
+                m.confidence, m.totalEvents, m.isolationCount));
         s.sendMessage(String.format(Locale.ROOT, "§7Thành phần: piston=%d, hopper=%d, dispenser=%d, observer=%d, tnt=%d, redstone=%d%s",
                 m.components.pistons, m.components.hoppers, m.components.dispensers, m.components.observers,
                 m.components.tnt, m.components.redstoneParts, m.components.partial ? " §e(quét chưa đầy đủ)" : ""));
@@ -183,6 +324,12 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§7Bằng chứng:");
         for (String e : m.evidence) {
             s.sendMessage("§8  • §7" + e);
+        }
+        if (m.lastLut != null && !m.lastLut.decision().blockers().isEmpty()) {
+            s.sendMessage("§7Chưa đủ điều kiện cách ly vì:");
+            for (String b : m.lastLut.decision().blockers()) {
+                s.sendMessage("§8  • §7" + b);
+            }
         }
         s.sendMessage("§7Nhật ký gần đây:");
         int from = Math.max(0, m.journal.size() - 5);
@@ -271,10 +418,14 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
     private void help(CommandSender s) {
         s.sendMessage("§6§l=== HorizonAI ===");
         s.sendMessage("§e/horizonai status §7- Tình trạng server");
-        s.sendMessage("§e/horizonai analyze §7- Phân tích ngay (cục bộ + AI nếu bật)");
-        s.sendMessage("§e/horizonai report §7- Báo cáo cục bộ");
+        s.sendMessage("§e/horizonai lut status §7- Trạng thái LUT và máy theo dõi");
+        s.sendMessage("§e/horizonai lut analyze §7- Báo cáo LUT (đọc kết quả gần nhất, không quét lại world)");
+        s.sendMessage("§e/horizonai lut profile §7- Bảng điểm và ngưỡng đang dùng");
+        s.sendMessage("§e/horizonai lut reload §7- Tải lại cấu hình LUT");
+        s.sendMessage("§e/horizonai analyze §7- Giống lut analyze");
+        s.sendMessage("§e/horizonai report §7- Tóm tắt từng máy");
         s.sendMessage("§e/horizonai redstone [list|inspect|isolate|restore] <id>");
-        s.sendMessage("§e/horizonai optimize §7- Đề xuất tối ưu");
+        s.sendMessage("§e/horizonai optimize §7- Đề xuất tối ưu (chỉ đề xuất)");
         s.sendMessage("§e/horizonai history §7- Lịch sử thao tác");
         s.sendMessage("§e/horizonai whitelist <list|addworld|addregion>");
         s.sendMessage("§e/horizonai reload");
@@ -297,14 +448,22 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
         fn.accept(m.get());
     }
 
-    private void printReport(CommandSender s, HealthReport r) {
-        s.sendMessage("§6§l=== Báo cáo HorizonAI (" + r.source() + ") ===");
-        s.sendMessage(Text.severityColor(r.overall()) + "Mức tổng thể: " + r.overall());
-        s.sendMessage("§f" + r.summary());
-        s.sendMessage("§7Nguyên nhân:");
-        r.causes().forEach(c -> s.sendMessage("§8  • §7" + c));
-        s.sendMessage("§7Khuyến nghị:");
-        r.recommendations().forEach(c -> s.sendMessage("§8  • §7" + c));
+    private LUTReportBuilder.ServerView serverView(double mspt) {
+        int warned = 0;
+        int isolated = 0;
+        for (Machine m : plugin.tracker().all()) {
+            if (m.state == Machine.State.ISOLATED) {
+                isolated++;
+            } else if (m.state == Machine.State.WARNED || m.state == Machine.State.PENDING_ISOLATION) {
+                warned++;
+            }
+        }
+        return new LUTReportBuilder.ServerView(mspt, plugin.settings().msptWarning,
+                plugin.settings().msptCritical, plugin.tracker().size(), warned, isolated);
+    }
+
+    private List<Machine> tracked() {
+        return new ArrayList<>(plugin.tracker().all());
     }
 
     private static String outcomeText(MachineIsolation.Outcome o, String id) {
@@ -333,6 +492,9 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
             return filter(SUB, args[0]);
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("lut")) {
+            return filter(LUT_SUB, args[1]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("redstone")) {
             return filter(REDSTONE_SUB, args[1]);

@@ -1,7 +1,20 @@
-
 # ==========================================================
 # HorizonAI Optimizer - config.yml
 # Minecraft Paper / Purpur 1.21.x
+#
+# Phiên bản LUT (offline): plugin KHÔNG còn dùng AI, KHÔNG cần API key,
+# KHÔNG cần Internet. Mục ai.* đã bị xóa.
+#
+# MIGRATION từ bản AI:
+#  - Xóa toàn bộ mục "ai:" (ai.enabled, ai.provider, ai.model, ai.endpoint,
+#    ai.api-key-env, ai.api-key, ai.timeout-seconds, ai.max-retries,
+#    ai.circuit-breaker-*, ai.report-language, ai.analysis-interval-seconds,
+#    ai.max-requests-per-hour). Plugin sẽ ghi cảnh báo nếu còn thấy mục này.
+#  - Các khóa redstone.min-correlation, redstone.min-samples,
+#    redstone.min-mspt-correlation-delta, redstone.clock-*, redstone.auto-isolate
+#    vẫn được chấp nhận như khóa cũ nếu lut.* tương ứng CHƯA được đặt.
+#    Nên chuyển sang mục lut.* bên dưới.
+#  - Sau khi sửa, chạy /horizonai lut reload (không cần khởi động lại server).
 # ==========================================================
 
 language: vi
@@ -26,62 +39,79 @@ monitoring:
 
 
 # ==========================================================
-# AI CONFIGURATION
+# ADVANCED MACHINE LUT (offline, deterministic)
 # ==========================================================
+# Điểm rủi ro 0-100 từ 8 nhóm có trần (xem /horizonai lut profile).
+# Điểm KHÔNG tự cho phép cách ly. Cách ly cần đủ mọi cổng bằng chứng
+# và luôn cần Admin duyệt mặc định.
 
-ai:
+lut:
+  # Tắt = không chạy phân tích tự động (lệnh thủ công vẫn hoạt động).
   enabled: true
 
-  # Provider: openai hoặc openai-compatible
-  provider: openai
+  analysis:
+    # Số mẫu (cửa sổ) tối thiểu trước khi được kết luận.
+    min-samples: 12
+    # Số cửa sổ dùng để phân tích (tối đa 120).
+    history-size: 120
+    # Độ tin cậy tối thiểu (0.0-1.0) để đủ điều kiện chờ cách ly.
+    minimum-confidence: 0.70
 
-  # Model AI
-  model: gpt-4o-mini
+  thresholds:
+    # Tỉ lệ sự kiện so với baseline lịch sử.
+    event-ratio-low: 1.0
+    event-ratio-medium: 2.0
+    event-ratio-high: 3.0
+    # Pearson tối thiểu giữa hoạt động máy và MSPT.
+    correlation-minimum: 0.50
+    # Chênh MSPT tối thiểu (ms) khi máy hoạt động so với nhàn rỗi.
+    mspt-delta-minimum: 5.0
+    # Clock được coi là "ổn định lặp lại" khi tần số >= min và CV <= max.
+    clock-min-frequency-hz: 2.0
+    clock-max-interval-cv: 0.25
 
-  # OpenAI Chat Completions endpoint
-  endpoint: https://api.openai.com/v1/chat/completions
+  scoring:
+    # Ngưỡng điểm bắt đầu MEDIUM (cảnh báo Level 1).
+    warning-score: 45
+    # Ngưỡng điểm bắt đầu HIGH (điều kiện tối thiểu cho Level 2).
+    high-score: 65
+    # Ngưỡng điểm bắt đầu CRITICAL.
+    critical-score: 80
+    # Quy ước cố định: 0-24 NORMAL, 25-44 LOW.
 
-  # --------------------------------------------------------
-  # API KEY CONFIGURATION
-  # --------------------------------------------------------
+  weights:
+    # Điểm cộng cho từng bậc (mỗi giá trị kẹp trong [0, 30]).
+    event-ratio-low-points: 8
+    event-ratio-medium-points: 14
+    event-ratio-high-points: 20
+    mspt-delta-low-points: 8
+    mspt-delta-medium-points: 14
+    mspt-delta-high-points: 20
+    stable-clock-points: 12
+    critical-mspt-points: 12
+    correlation-points: 10
 
-  # Ưu tiên đọc API Key từ Environment Variable.
-  api-key-env: HORIZONAI_AI_KEY
+  safety:
+    # Ba cổng dưới đây LUÔN bật cho Level 2 (đặt false chỉ ghi cảnh báo, không có tác dụng).
+    require-correlation: true
+    require-clear-boundary: true
+    require-complete-scan: true
+    # Mặc định: mọi cách ly phải do Admin duyệt.
+    require-admin-approval: true
+    # Chỉ có tác dụng khi require-admin-approval = false.
+    auto-isolate: false
 
-  # API Key dự phòng nếu hosting không hỗ trợ Environment Variables.
-  # Chỉ nhập key thật trong config.yml trên server.
-  # Không commit key thật lên GitHub.
-  api-key: ""
-
-  # --------------------------------------------------------
-  # REQUEST SETTINGS
-  # --------------------------------------------------------
-
-  # Khoảng cách giữa hai lần phân tích AI (giây).
-  analysis-interval-seconds: 300
-
-  # Giới hạn request mỗi giờ.
-  max-requests-per-hour: 12
-
-  # Timeout request (giây).
-  timeout-seconds: 20
-
-  # Số lần retry khi request thất bại.
-  max-retries: 2
-
-  # --------------------------------------------------------
-  # CIRCUIT BREAKER
-  # --------------------------------------------------------
-
-  circuit-breaker-failure-threshold: 3
-  circuit-breaker-open-seconds: 300
-
-  # Ngôn ngữ báo cáo AI.
-  report-language: vi
+  performance:
+    # Ngân sách thời gian LUT mỗi cửa sổ (ms). Vượt ngân sách thì các máy còn lại chỉ ghi lịch sử.
+    max-analysis-ms-per-window: 5
+    # Số máy tối đa được chấm điểm mỗi cửa sổ (luân phiên điểm bắt đầu).
+    max-machines-per-window: 30
+    # Giới hạn lịch sử (tối đa 120, lấy giá trị nhỏ hơn giữa hai khóa).
+    max-history-samples: 120
 
 
 # ==========================================================
-# REDSTONE ANALYZER
+# REDSTONE (phát hiện và cách ly)
 # ==========================================================
 
 redstone:
@@ -94,21 +124,12 @@ redstone:
 
   shared-source-margin: 6
 
-  # Điều kiện tương quan MSPT.
-  min-mspt-correlation-delta: 5.0
-  min-correlation: 0.5
-  min-samples: 12
-
+  # Số lần cảnh báo Level 1 trước khi chuyển sang Level 2.
   warnings-before-isolation: 2
 
-  # Không tự động cách ly.
-  auto-isolate: false
-
+  # Thời gian chờ (giây) giữa Level 2 và tự cách ly (chỉ khi lut.safety.auto-isolate = true).
   isolation-delay-seconds: 60
   boundary-scan-radius: 24
-
-  clock-min-frequency-hz: 2.0
-  clock-max-interval-cv: 0.25
 
   warning:
     distance: 32

@@ -1,6 +1,10 @@
 
 package com.horizon.ai.utils;
 
+import com.horizon.ai.lut.LUTProfile;
+import com.horizon.ai.lut.LUTSafety;
+import com.horizon.ai.lut.LUTThresholds;
+import com.horizon.ai.lut.LUTWeights;
 import org.bukkit.configuration.file.FileConfiguration;
 
 import java.util.ArrayList;
@@ -25,23 +29,9 @@ public final class Settings {
     public final double msptCritical;
     public final double lagSpikeDelta;
 
-    // ai
-    public final boolean aiEnabled;
-    public final String aiProvider;
-    public final String aiModel;
-    public final String aiEndpoint;
-    public final String aiKeyEnv;
-
-    // API Key fallback từ config.yml
-    public final String aiApiKey;
-
-    public final int aiIntervalSeconds;
-    public final int aiMaxRequestsPerHour;
-    public final int aiTimeoutSeconds;
-    public final int aiMaxRetries;
-    public final int cbFailureThreshold;
-    public final int cbOpenSeconds;
-    public final String aiReportLanguage;
+    // lut (phân tích cục bộ, không dùng AI)
+    public final boolean lutEnabled;
+    public final LUTProfile lutProfile;
 
     // redstone
     public final int rsThresholdEvents;
@@ -50,15 +40,9 @@ public final class Settings {
     public final int maxAnalyzedBlocks;
     public final int maxTrackedMachines;
     public final int sharedSourceMargin;
-    public final double minMsptCorrelationDelta;
-    public final double minCorrelation;
-    public final int minSamples;
     public final int warningsBeforeIsolation;
-    public final boolean autoIsolate;
     public final int isolationDelaySeconds;
     public final int boundaryScanRadius;
-    public final double clockMinFrequencyHz;
-    public final double clockMaxIntervalCv;
 
     // redstone warning
     public final int warnDistance;
@@ -130,71 +114,6 @@ public final class Settings {
         );
 
         // ==================================================
-        // AI
-        // ==================================================
-
-        aiEnabled = c.getBoolean("ai.enabled", true);
-
-        aiProvider = c.getString(
-                "ai.provider", "openai"
-        ).toLowerCase(Locale.ROOT);
-
-        aiModel = c.getString(
-                "ai.model", "gpt-4o-mini"
-        );
-
-        aiEndpoint = c.getString(
-                "ai.endpoint",
-                "https://api.openai.com/v1/chat/completions"
-        );
-
-        // Tên Environment Variable
-        aiKeyEnv = c.getString(
-                "ai.api-key-env",
-                "HORIZONAI_AI_KEY"
-        );
-
-        // API Key dự phòng từ config.yml
-        aiApiKey = c.getString(
-                "ai.api-key",
-                ""
-        );
-
-        aiIntervalSeconds = clamp(
-                c.getInt("ai.analysis-interval-seconds", 300),
-                60, 86_400
-        );
-
-        aiMaxRequestsPerHour = clamp(
-                c.getInt("ai.max-requests-per-hour", 12),
-                1, 1000
-        );
-
-        aiTimeoutSeconds = clamp(
-                c.getInt("ai.timeout-seconds", 20),
-                3, 120
-        );
-
-        aiMaxRetries = clamp(
-                c.getInt("ai.max-retries", 2),
-                0, 5
-        );
-
-        cbFailureThreshold = clamp(
-                c.getInt("ai.circuit-breaker-failure-threshold", 3),
-                1, 50
-        );
-
-        cbOpenSeconds = clamp(
-                c.getInt("ai.circuit-breaker-open-seconds", 300),
-                10, 86_400
-        );
-
-        aiReportLanguage = c.getString(
-                "ai.report-language", "vi"
-        );
-
-        // ==================================================
         // REDSTONE
         // ==================================================
 
@@ -228,28 +147,9 @@ public final class Settings {
                 1, 32
         );
 
-        minMsptCorrelationDelta = Math.max(
-                0.0,
-                c.getDouble("redstone.min-mspt-correlation-delta", 5.0)
-        );
-
-        minCorrelation = Math.max(
-                0.1,
-                Math.min(0.99, c.getDouble("redstone.min-correlation", 0.5))
-        );
-
-        minSamples = clamp(
-                c.getInt("redstone.min-samples", 12),
-                4, 120
-        );
-
         warningsBeforeIsolation = clamp(
                 c.getInt("redstone.warnings-before-isolation", 2),
                 1, 20
-        );
-
-        autoIsolate = c.getBoolean(
-                "redstone.auto-isolate", false
         );
 
         isolationDelaySeconds = clamp(
@@ -260,16 +160,6 @@ public final class Settings {
         boundaryScanRadius = clamp(
                 c.getInt("redstone.boundary-scan-radius", 24),
                 4, 64
-        );
-
-        clockMinFrequencyHz = Math.max(
-                0.1,
-                c.getDouble("redstone.clock-min-frequency-hz", 2.0)
-        );
-
-        clockMaxIntervalCv = Math.max(
-                0.01,
-                c.getDouble("redstone.clock-max-interval-cv", 0.25)
         );
 
         // ==================================================
@@ -448,6 +338,18 @@ public final class Settings {
                 c.getInt("database.retention-days", 14),
                 1, 365
         );
+
+        // ==================================================
+        // LUT (phân tích cục bộ, không dùng AI)
+        // ==================================================
+
+        lutEnabled = boolKey(c, log, "lut.enabled", null, true);
+
+        if (c.isConfigurationSection("ai")) {
+            log.warning("[HorizonAI] Mục 'ai' trong config.yml đã bị loại bỏ. Plugin không còn gọi AI và không đọc API key. Có thể xóa mục này.");
+        }
+
+        lutProfile = readLut(c, log, rsThresholdEvents, msptCritical);
     }
 
     public boolean isWorldWhitelisted(String world) {
@@ -475,6 +377,127 @@ public final class Settings {
         return excludedPlayers.contains(
                 name.toLowerCase(Locale.ROOT)
         );
+    }
+
+    /**
+     * Đọc số từ config. Nếu khóa không phải số, không hữu hạn hoặc ngoài khoảng: ghi cảnh báo rõ ràng
+     * và dùng giá trị an toàn. Không bao giờ im lặng bỏ qua cấu hình sai.
+     * legacy: khóa cũ được chấp nhận khi khóa mới chưa được đặt (tương thích ngược).
+     */
+    private static double numKey(FileConfiguration c, Logger log, String path, String legacy,
+                                 double def, double min, double max) {
+        String key = path;
+        if (!c.isSet(path) && legacy != null && c.isSet(legacy)) {
+            key = legacy;
+            log.info("[HorizonAI] Đang dùng khóa cũ '" + legacy + "'. Hãy chuyển sang '" + path + "'.");
+        }
+        if (!c.isSet(key)) {
+            return def;
+        }
+        Object raw = c.get(key);
+        if (!(raw instanceof Number n)) {
+            log.warning("[HorizonAI] '" + key + "' phải là số, nhận '" + raw + "'. Dùng " + def + ".");
+            return def;
+        }
+        double v = n.doubleValue();
+        if (!Double.isFinite(v) || v < min || v > max) {
+            double fixed = Double.isFinite(v) ? Math.max(min, Math.min(max, v)) : def;
+            log.warning("[HorizonAI] '" + key + "' = " + v + " nằm ngoài [" + min + ", " + max + "]. Dùng " + fixed + ".");
+            return fixed;
+        }
+        return v;
+    }
+
+    private static int intKey(FileConfiguration c, Logger log, String path, String legacy,
+                              int def, int min, int max) {
+        return (int) Math.round(numKey(c, log, path, legacy, def, min, max));
+    }
+
+    private static boolean boolKey(FileConfiguration c, Logger log, String path, String legacy, boolean def) {
+        String key = path;
+        if (!c.isSet(path) && legacy != null && c.isSet(legacy)) {
+            key = legacy;
+            log.info("[HorizonAI] Đang dùng khóa cũ '" + legacy + "'. Hãy chuyển sang '" + path + "'.");
+        }
+        if (!c.isSet(key)) {
+            return def;
+        }
+        Object raw = c.get(key);
+        if (raw instanceof Boolean b) {
+            return b;
+        }
+        log.warning("[HorizonAI] '" + key + "' phải là true hoặc false, nhận '" + raw + "'. Dùng " + def + ".");
+        return def;
+    }
+
+    /** Đọc toàn bộ mục lut.* thành một LUTProfile bất biến. */
+    private static LUTProfile readLut(FileConfiguration c, Logger log, int eventThreshold, double msptCritical) {
+        LUTWeights w = new LUTWeights(
+                intKey(c, log, "lut.weights.event-ratio-low-points", null, 8, 0, 30),
+                intKey(c, log, "lut.weights.event-ratio-medium-points", null, 14, 0, 30),
+                intKey(c, log, "lut.weights.event-ratio-high-points", null, 20, 0, 30),
+                intKey(c, log, "lut.weights.mspt-delta-low-points", null, 8, 0, 30),
+                intKey(c, log, "lut.weights.mspt-delta-medium-points", null, 14, 0, 30),
+                intKey(c, log, "lut.weights.mspt-delta-high-points", null, 20, 0, 30),
+                intKey(c, log, "lut.weights.stable-clock-points", null, 12, 0, 30),
+                intKey(c, log, "lut.weights.critical-mspt-points", null, 12, 0, 30),
+                intKey(c, log, "lut.weights.correlation-points", null, 10, 0, 30));
+
+        double ratioLow = numKey(c, log, "lut.thresholds.event-ratio-low", null, 1.0, 0.1, 1000);
+        double ratioMed = numKey(c, log, "lut.thresholds.event-ratio-medium", null, 2.0, 0.1, 1000);
+        double ratioHigh = numKey(c, log, "lut.thresholds.event-ratio-high", null, 3.0, 0.1, 1000);
+        if (!(ratioLow <= ratioMed && ratioMed <= ratioHigh)) {
+            log.warning("[HorizonAI] lut.thresholds.event-ratio-* phải tăng dần (low <= medium <= high). Dùng 1.0 / 2.0 / 3.0.");
+            ratioLow = 1.0;
+            ratioMed = 2.0;
+            ratioHigh = 3.0;
+        }
+
+        int warn = intKey(c, log, "lut.scoring.warning-score", null, 45, 26, 98);
+        int high = intKey(c, log, "lut.scoring.high-score", null, 65, 27, 99);
+        int crit = intKey(c, log, "lut.scoring.critical-score", null, 80, 28, 100);
+        if (!(warn < high && high < crit)) {
+            log.warning("[HorizonAI] lut.scoring phải thỏa warning-score < high-score < critical-score. Dùng 45 / 65 / 80.");
+            warn = 45;
+            high = 65;
+            crit = 80;
+        }
+
+        LUTThresholds t = new LUTThresholds(
+                ratioLow, ratioMed, ratioHigh,
+                numKey(c, log, "lut.thresholds.correlation-minimum", "redstone.min-correlation", 0.5, 0.10, 0.99),
+                numKey(c, log, "lut.thresholds.mspt-delta-minimum", "redstone.min-mspt-correlation-delta", 5.0, 0.5, 500),
+                msptCritical,
+                warn, high, crit,
+                intKey(c, log, "lut.analysis.min-samples", "redstone.min-samples", 12, 4, 120),
+                Math.min(
+                        intKey(c, log, "lut.analysis.history-size", null, 120, 4, 120),
+                        intKey(c, log, "lut.performance.max-history-samples", null, 120, 4, 120)),
+                numKey(c, log, "lut.analysis.minimum-confidence", null, 0.70, 0.0, 1.0),
+                numKey(c, log, "lut.thresholds.clock-min-frequency-hz", "redstone.clock-min-frequency-hz", 2.0, 0.1, 1000),
+                numKey(c, log, "lut.thresholds.clock-max-interval-cv", "redstone.clock-max-interval-cv", 0.25, 0.01, 10),
+                eventThreshold);
+
+        // Các cờ bằng chứng luôn bắt buộc. Đặt false chỉ được ghi cảnh báo, không có tác dụng.
+        for (String k : new String[]{"require-correlation", "require-clear-boundary", "require-complete-scan"}) {
+            if (!boolKey(c, log, "lut.safety." + k, null, true)) {
+                log.warning("[HorizonAI] lut.safety." + k + " = false bị bỏ qua: cổng này luôn bắt buộc để cách ly an toàn.");
+            }
+        }
+        boolean requireAdmin = boolKey(c, log, "lut.safety.require-admin-approval", null, true);
+        boolean autoIsolate = boolKey(c, log, "lut.safety.auto-isolate", "redstone.auto-isolate", false);
+        if (autoIsolate && requireAdmin) {
+            log.warning("[HorizonAI] lut.safety.auto-isolate = true bị vô hiệu vì require-admin-approval = true.");
+        }
+        if (autoIsolate && !requireAdmin) {
+            log.warning("[HorizonAI] CẢNH BÁO: tự cách ly máy được BẬT (require-admin-approval = false). Máy sẽ bị cách ly sau trì hoãn mà không cần Admin.");
+        }
+        LUTSafety safety = new LUTSafety(true, true, true, requireAdmin, autoIsolate);
+
+        int maxMachines = intKey(c, log, "lut.performance.max-machines-per-window", null, 30, 1, 256);
+        double maxMs = numKey(c, log, "lut.performance.max-analysis-ms-per-window", null, 5.0, 0.5, 50);
+
+        return new LUTProfile(w, t, safety, maxMachines, maxMs);
     }
 
     private static Set<String> upperSet(List<String> in) {

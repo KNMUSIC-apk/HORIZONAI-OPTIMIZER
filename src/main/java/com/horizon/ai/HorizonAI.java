@@ -1,11 +1,10 @@
 package com.horizon.ai;
 
-import com.horizon.ai.ai.AIAnalyzer;
-import com.horizon.ai.analyzer.LocalAnalyzer;
 import com.horizon.ai.chunk.ChunkHealthScanner;
 import com.horizon.ai.commands.HorizonCommand;
 import com.horizon.ai.events.IsolationListener;
 import com.horizon.ai.events.RedstoneEventListener;
+import com.horizon.ai.lut.LUTEngine;
 import com.horizon.ai.optimizer.ActionValidator;
 import com.horizon.ai.optimizer.WarningService;
 import com.horizon.ai.performance.PerformanceMonitor;
@@ -13,7 +12,6 @@ import com.horizon.ai.redstone.ActivityTracker;
 import com.horizon.ai.redstone.ActorTracker;
 import com.horizon.ai.redstone.MachineIsolation;
 import com.horizon.ai.redstone.MachineTracker;
-import com.horizon.ai.redstone.RedstoneAnalyzer;
 import com.horizon.ai.redstone.RedstoneGuardian;
 import com.horizon.ai.storage.Database;
 import com.horizon.ai.utils.Settings;
@@ -29,10 +27,11 @@ import java.util.logging.Level;
 /**
  * Điểm vào của HorizonAI Optimizer.
  *
- * Kiến trúc:
- *  - Thu thập (events + PerformanceMonitor) -> phân cụm (async) -> phân tích (Main Thread)
- *    -> cảnh báo Level 1 / cách ly Level 2 (có thể hoàn tác) -> AI (chỉ phủ quyết, cố vấn).
- *  - AI và DB đều bất đồng bộ; mất kết nối AI không làm dừng hệ thống cục bộ.
+ * Kiến trúc (hoàn toàn offline, không cần API key hay Internet):
+ *  - Thu thập (events + PerformanceMonitor) → phân cụm (async) → lịch sử máy (Main Thread)
+ *    → Advanced Machine LUT (Main Thread, thuần tính toán) → Level 1 (cảnh báo) / Level 2 (chờ Admin)
+ *    → Level 3 (cách ly có thể hoàn tác, chỉ qua MachineIsolation).
+ *  - DB bất đồng bộ; mất kết nối là không có vấn đề gì vì không có kết nối nào.
  *  - Reload: dựng lại toàn bộ thành phần từ config mới; các máy đang cách ly được nạp lại từ DB.
  */
 public final class HorizonAI extends JavaPlugin {
@@ -46,9 +45,7 @@ public final class HorizonAI extends JavaPlugin {
     private MachineIsolation isolation;
     private WarningService warnings;
     private ActionValidator validator;
-    private RedstoneAnalyzer analyzer;
-    private AIAnalyzer ai;
-    private LocalAnalyzer local;
+    private LUTEngine lut;
     private RedstoneGuardian guardian;
     private ChunkHealthScanner chunks;
     private BukkitTask maintenance;
@@ -75,7 +72,8 @@ public final class HorizonAI extends JavaPlugin {
         maintenance = getServer().getScheduler().runTaskTimerAsynchronously(this,
                 () -> database.purgeOlderThan(retention), 20L * 60, 20L * 60 * 60 * 24);
 
-        getLogger().info("HorizonAI đã bật. AI: " + ai.statusLabel());
+        getLogger().info("HorizonAI đã bật. Advanced Machine LUT: "
+                + (settings.lutEnabled ? "BẬT (cục bộ, không cần API key)" : "TẮT (chỉ lệnh thủ công)"));
     }
 
     @Override
@@ -104,14 +102,10 @@ public final class HorizonAI extends JavaPlugin {
         isolation = new MachineIsolation(settings, db, tracker);
         warnings = new WarningService(settings, getLogger());
         validator = new ActionValidator(settings, tracker);
-        analyzer = new RedstoneAnalyzer(new RedstoneAnalyzer.Params(
-                settings.rsThresholdEvents, settings.clockMinFrequencyHz, settings.clockMaxIntervalCv,
-                settings.minMsptCorrelationDelta, settings.msptCritical, settings.minSamples, settings.minCorrelation));
-        local = new LocalAnalyzer(settings);
-        ai = new AIAnalyzer(settings, getLogger());
+        lut = new LUTEngine(settings.lutProfile);
         perf = new PerformanceMonitor(this, settings, db);
         guardian = new RedstoneGuardian(this, settings, getLogger(), perf, activity, actors, tracker,
-                isolation, warnings, validator, analyzer, ai);
+                isolation, warnings, validator, lut);
         chunks = new ChunkHealthScanner(this, settings, warnings);
 
         PluginManager pm = getServer().getPluginManager();
@@ -189,12 +183,8 @@ public final class HorizonAI extends JavaPlugin {
         return validator;
     }
 
-    public AIAnalyzer ai() {
-        return ai;
-    }
-
-    public LocalAnalyzer local() {
-        return local;
+    public LUTEngine lut() {
+        return lut;
     }
 
     public RedstoneGuardian guardian() {

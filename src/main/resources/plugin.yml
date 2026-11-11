@@ -3,22 +3,21 @@ main: com.horizon.ai.HorizonAI
 version: 1.0.0
 api-version: '1.21'
 author: HorizonAI
-description: AI-assisted Paper/Purpur performance guard with reversible Redstone isolation.
+description: Offline deterministic Redstone machine analysis (Advanced Machine LUT) with reversible isolation. No AI, no API key.
 
 libraries:
-  - com.fasterxml.jackson.core:jackson-databind:2.18.2
   - org.xerial:sqlite-jdbc:3.47.1.0
 
 commands:
   horizonai:
     description: HorizonAI main command
     aliases: [hai]
-    usage: /<command> [status|analyze|report|redstone|optimize|history|whitelist|reload]
+    usage: /<command> [status|lut|analyze|report|redstone|optimize|history|whitelist|reload]
     permission: horizonai.use
 
 permissions:
   horizonai.use:
-    description: View HorizonAI status
+    description: View HorizonAI status and LUT reports
     default: op
   horizonai.admin:
     description: Full HorizonAI administration (parent of all horizonai.* nodes)
@@ -39,7 +38,7 @@ permissions:
     description: Manage whitelisted regions
     default: op
   horizonai.reload:
-    description: Reload configuration
+    description: Reload configuration (including LUT profile)
     default: op
   horizonai.notify.exclude:
     description: Never receive HorizonAI Redstone warnings

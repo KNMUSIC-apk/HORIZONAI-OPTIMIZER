@@ -1,7 +1,11 @@
 package com.horizon.ai.redstone;
 
-import com.horizon.ai.ai.AIAnalyzer;
-import com.horizon.ai.analyzer.HealthReport;
+import com.horizon.ai.lut.LUTDecision;
+import com.horizon.ai.lut.LUTEngine;
+import com.horizon.ai.lut.LUTInput;
+import com.horizon.ai.lut.LUTProfile;
+import com.horizon.ai.lut.LUTReportBuilder;
+import com.horizon.ai.lut.LUTResult;
 import com.horizon.ai.optimizer.ActionValidator;
 import com.horizon.ai.optimizer.WarningService;
 import com.horizon.ai.performance.PerfSample;
@@ -17,25 +21,23 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 /**
- * Bộ điều phối AI Redstone Limiter: mỗi cửa sổ thời gian thực hiện
- *  1. Rút snapshot hoạt động (Main Thread, O(số block đã giới hạn)).
- *  2. Phân cụm block (luồng async, không chạm Bukkit API).
- *  3. Phân tích từng máy, quyết định Level 1 (cảnh báo) và Level 2 (cách ly) (Main Thread).
- *  4. Định kỳ gọi AI với snapshot đã thu thập; AI chỉ có thể PHỦ QUYẾT cách ly, không thể kích hoạt.
+ * Bộ điều phối Redstone mỗi cửa sổ thời gian:
+ *  1. Rút snapshot hoạt động (Main Thread, số block bị giới hạn).
+ *  2. Phân cụm block thành máy (luồng async, không chạm Bukkit API).
+ *  3. Cập nhật lịch sử máy, quét thành phần khi cần (Main Thread).
+ *  4. Chấm điểm bằng Advanced Machine LUT (Main Thread, thuần tính toán, có giới hạn số máy và thời gian).
+ *  5. Quyết định Level 1 (cảnh báo) và Level 2 (chờ cách ly). Level 3 chỉ qua MachineIsolation.
+ *
+ * Không có AI, không có mạng. LUT không bao giờ tự thay đổi block.
  */
 public final class RedstoneGuardian {
 
     private static final long ACTIVE_LOOKUP_MS = 5 * 60_000L;
-    private static final long AI_VETO_FRESH_MS = 15 * 60_000L;
-    private static final int AI_SERIES_TAIL = 12;
-    private static final int AI_MAX_MACHINES = 30;
     /** Số lần quét thành phần tối đa mỗi cửa sổ, để không làm lag Main Thread. */
     private static final int MAX_SCANS_PER_WINDOW = 2;
 
@@ -52,8 +54,7 @@ public final class RedstoneGuardian {
     private final MachineIsolation isolation;
     private final WarningService warnings;
     private final ActionValidator validator;
-    private final RedstoneAnalyzer analyzer;
-    private final AIAnalyzer ai;
+    private final LUTEngine lut;
     private final AtomicBoolean inFlight = new AtomicBoolean(false);
     private int windowIndex;
     private int scanBudget;
@@ -62,7 +63,7 @@ public final class RedstoneGuardian {
     public RedstoneGuardian(Plugin plugin, Settings settings, Logger log, PerformanceMonitor perf,
                             ActivityTracker activity, ActorTracker actors, MachineTracker tracker,
                             MachineIsolation isolation, WarningService warnings, ActionValidator validator,
-                            RedstoneAnalyzer analyzer, AIAnalyzer ai) {
+                            LUTEngine lut) {
         this.plugin = plugin;
         this.settings = settings;
         this.log = log;
@@ -73,8 +74,7 @@ public final class RedstoneGuardian {
         this.isolation = isolation;
         this.warnings = warnings;
         this.validator = validator;
-        this.analyzer = analyzer;
-        this.ai = ai;
+        this.lut = lut;
     }
 
     public void start() {
@@ -90,6 +90,10 @@ public final class RedstoneGuardian {
 
     public int windowIndex() {
         return windowIndex;
+    }
+
+    public LUTProfile profile() {
+        return lut.profile();
     }
 
     /** Main Thread. */
@@ -142,19 +146,36 @@ public final class RedstoneGuardian {
             }
         }
 
-        for (Pair p : pairs) {
+        LUTProfile profile = lut.profile();
+        long budgetNanos = (long) (profile.maxAnalysisMsPerWindow() * 1_000_000L);
+        long start = System.nanoTime();
+        int limit = profile.maxMachinesPerWindow();
+        int offset = pairs.isEmpty() ? 0 : wi % pairs.size(); // luân phiên điểm bắt đầu để không máy nào bị bỏ đói
+        List<Pair> analyzed = new ArrayList<>();
+
+        for (int k = 0; k < pairs.size(); k++) {
+            Pair p = pairs.get((offset + k) % pairs.size());
+            boolean runLut = settings.lutEnabled
+                    && analyzed.size() < limit
+                    && System.nanoTime() - start < budgetNanos;
             int others = activeCount - (p.cluster().events() >= activeFloor ? 1 : 0);
-            analyze(p, mspt, nowMs, wi, others);
+            analyze(p, mspt, nowMs, wi, others, runLut);
+            if (runLut) {
+                analyzed.add(p);
+            }
         }
         tracker.endWindow(wi, mspt);
-        for (Pair p : pairs) {
+        for (Pair p : analyzed) {
             decide(p.machine(), nowMs, wi);
         }
         isolation.refresh();
-        maybeRunAi(nowMs);
     }
 
-    private void analyze(Pair p, double mspt, long nowMs, int wi, int otherActive) {
+    /**
+     * Cập nhật lịch sử máy trong cửa sổ hiện tại. Lịch sử luôn được ghi (để giữ cặp activity/MSPT đồng bộ),
+     * còn LUT chỉ chạy khi nằm trong giới hạn số máy và ngân sách thời gian của cửa sổ.
+     */
+    private void analyze(Pair p, double mspt, long nowMs, int wi, int otherActive, boolean runLut) {
         Machine m = p.machine();
         MachineIdentifier.Cluster c = p.cluster();
 
@@ -181,36 +202,52 @@ public final class RedstoneGuardian {
         double base = m.baselineEvents < 0 ? events : m.baselineEvents;
         m.addSeries(events, mspt);
 
-        RedstoneAnalyzer.MachineStats stats = new RedstoneAnalyzer.MachineStats(
-                c.events(), base, c.clockFrequencyHz(), c.clockIntervalCv(),
-                m.seriesActivity(), m.seriesMspt(), mspt, otherActive,
-                c.isContainable(), m.containableParts() > 0, m.containableParts());
-        RedstoneAnalyzer.Verdict v = analyzer.analyze(stats);
-
-        Severity prev = m.severity;
-        m.severity = v.severity();
-        m.confidence = v.confidence();
-        m.eligible = v.isolationEligible();
-        m.correlated = v.correlated();
-        m.evidence = v.evidence();
-        m.baselineEvents = base + 0.1 * (events - base);
-
-        if (v.severity() != prev) {
-            m.log("Mức " + prev + " → " + v.severity()
-                    + String.format(Locale.ROOT, " (r=%.2f, ΔMSPT=%.1f)", v.correlation(), v.msptDelta()));
+        if (runLut) {
+            LUTInput in = new LUTInput(
+                    m.id, m.world, m.seriesActivity(), m.seriesMspt(), base,
+                    c.events(), settings.rsWindowSeconds,
+                    c.clockFrequencyHz(), c.clockIntervalCv(), mspt, otherActive,
+                    c.isContainable(),
+                    m.lastScanWindow > 0 && !m.components.partial,
+                    new LUTInput.Composition(m.components.pistons, m.components.hoppers, m.components.dispensers,
+                            m.components.observers, m.components.tnt, m.components.redstoneParts));
+            applyLut(m, lut.analyze(in));
         }
-        if (v.severity().atLeast(Severity.MEDIUM)) {
+
+        m.baselineEvents = base + 0.1 * (events - base);
+        if (m.severity.atLeast(Severity.MEDIUM)) {
             Region r = m.region;
             m.activatorName = actors.activatorIn(r, 2, ACTIVE_LOOKUP_MS).map(ActorTracker.Actor::name).orElse(null);
             m.builderName = actors.builderIn(r, 2, ACTIVE_LOOKUP_MS).map(ActorTracker.Actor::name).orElse(null);
         }
     }
 
-    /** Quyết định Level 1 / Level 2 cho một máy vừa được phân tích. Main Thread. */
+    /** Ghi kết quả LUT vào máy. Không thay đổi block. */
+    private void applyLut(Machine m, LUTResult r) {
+        Severity prev = m.severity;
+        m.lastLut = r;
+        m.severity = r.severity();
+        m.confidence = r.confidence();
+        m.eligible = r.decision().isolationEligible();
+        m.correlated = r.decision().correlated();
+        m.evidence = LUTReportBuilder.evidence(r, lut.profile().thresholds());
+        if (m.severity != prev) {
+            m.log("Mức " + prev + " → " + m.severity
+                    + String.format(java.util.Locale.ROOT, " (r=%.2f, ΔMSPT=%.1f)",
+                    r.features().correlation(), r.features().msptDelta()));
+        }
+    }
+
+    /** Quyết định Level 1 / Level 2 cho một máy vừa được LUT phân tích. Main Thread. */
     private void decide(Machine m, long nowMs, int wi) {
         if (m.state == Machine.State.ISOLATED) {
             return;
         }
+        LUTResult r = m.lastLut;
+        if (r == null) {
+            return;
+        }
+        LUTDecision d = r.decision();
         Severity s = m.severity;
         long alertCooldown = settings.adminAlertCooldownSeconds * 1000L;
 
@@ -223,8 +260,7 @@ public final class RedstoneGuardian {
         }
 
         // LEVEL 1: cảnh báo riêng cho người chơi gần máy
-        if (m.correlated && s.atLeast(Severity.MEDIUM)
-                && (m.state == Machine.State.OBSERVED || m.state == Machine.State.WARNED)) {
+        if (d.level() >= 1 && (m.state == Machine.State.OBSERVED || m.state == Machine.State.WARNED)) {
             int before = m.warningCount;
             warnings.warnNearby(m, nowMs);
             if (m.warningCount > before) {
@@ -244,16 +280,17 @@ public final class RedstoneGuardian {
                     + m.id, "alert:" + m.id, nowMs, alertCooldown);
         }
 
-        // LEVEL 2: chuyển sang chờ cách ly khi đã cảnh báo đủ số lần và đủ điều kiện nghiêm ngặt
+        // LEVEL 2: đã cảnh báo đủ số lần VÀ LUT xác nhận đủ mọi cổng bằng chứng.
+        // Hàng đợi Admin luôn đi qua ActionValidator: ISOLATE_MACHINE → QUEUE_FOR_ADMIN.
         if (m.state == Machine.State.WARNED && m.warningCount >= settings.warningsBeforeIsolation && m.eligible) {
-            if (aiVetoes(m, nowMs)) {
-                m.log("AI không xác nhận nguyên nhân: không chuyển sang Level 2");
-                return;
-            }
+            ActionValidator.Result v = validator.validate(
+                    new ActionValidator.ProposedAction("ISOLATE_MACHINE", m.id, "LUT Level 2"));
+            boolean auto = d.autoIsolationAllowed();
             m.state = Machine.State.PENDING_ISOLATION;
             m.pendingSinceMillis = nowMs;
-            m.log("Đủ điều kiện Level 2, " + (settings.autoIsolate ? "sẽ tự cách ly sau trì hoãn" : "chờ Admin duyệt"));
-            String action = settings.autoIsolate
+            m.log("Đủ điều kiện Level 2 (" + v.decision() + "), "
+                    + (auto ? "sẽ tự cách ly sau trì hoãn" : "chờ Admin duyệt"));
+            String action = auto
                     ? "Sẽ tự động cách ly sau " + settings.isolationDelaySeconds + " giây."
                     : "Duyệt bằng: /horizonai redstone isolate " + m.id;
             warnings.notifyAdmins("§cMáy §f" + m.id + " §cđủ điều kiện cách ly Level 2. " + action,
@@ -261,13 +298,14 @@ public final class RedstoneGuardian {
         }
 
         if (m.state == Machine.State.PENDING_ISOLATION) {
-            if (!(m.eligible && s.atLeast(Severity.HIGH))) {
+            if (!m.eligible) {
                 m.state = Machine.State.WARNED;
                 m.pendingSinceMillis = 0;
                 m.log("Điều kiện không còn đủ, hủy chờ cách ly");
                 return;
             }
-            if (settings.autoIsolate && nowMs - m.pendingSinceMillis >= settings.isolationDelaySeconds * 1000L) {
+            // Tự cách ly chỉ khi cấu hình cho phép (đã loại trừ require-admin-approval) và đã hết trì hoãn.
+            if (d.autoIsolationAllowed() && nowMs - m.pendingSinceMillis >= settings.isolationDelaySeconds * 1000L) {
                 World w = Bukkit.getWorld(m.world);
                 if (w != null) {
                     tracker.scanComponents(m, w, wi);
@@ -284,77 +322,5 @@ public final class RedstoneGuardian {
                 }
             }
         }
-    }
-
-    private boolean aiVetoes(Machine m, long nowMs) {
-        Optional<HealthReport> r = ai.latest();
-        if (r.isEmpty() || nowMs - r.get().createdMillis() > AI_VETO_FRESH_MS) {
-            return false;
-        }
-        Boolean confirmed = r.get().machineConfirmed().get(m.id);
-        return confirmed != null && !confirmed;
-    }
-
-    private void maybeRunAi(long nowMs) {
-        if (!ai.isEnabled() || !ai.isDue(nowMs)) {
-            return;
-        }
-        AIAnalyzer.AnalysisInput input = snapshotForAi(nowMs);
-        ai.analyze(input).thenAccept(opt -> opt.ifPresent(report ->
-                Bukkit.getScheduler().runTask(plugin, () -> onAiReport(report))));
-    }
-
-    /** Main Thread: chỉ thực thi những hành động đã qua ActionValidator. */
-    public void onAiReport(HealthReport report) {
-        long now = System.currentTimeMillis();
-        for (ActionValidator.Result r : validator.validateAll(report.actions(), true)) {
-            switch (r.decision()) {
-                case EXECUTE -> execute(r.action(), now);
-                case QUEUE_FOR_ADMIN -> warnings.notifyAdmins("§eAI đề xuất cách ly máy §f" + r.action().machineId()
-                        + "§e (chờ Admin duyệt): /horizonai redstone isolate " + r.action().machineId(),
-                        "ai-queue:" + r.action().machineId(), now, settings.adminAlertCooldownSeconds * 1000L);
-                case SUGGEST_ONLY -> log.fine("[HorizonAI] Đề xuất (không tự thực hiện): " + r.action().type());
-                case REJECT -> log.fine("[HorizonAI] Từ chối đề xuất AI: " + r.why());
-            }
-        }
-    }
-
-    private void execute(ActionValidator.ProposedAction a, long now) {
-        switch (a.type().toUpperCase(Locale.ROOT)) {
-            case "WARN_PLAYER" -> tracker.get(a.machineId()).ifPresent(m -> warnings.warnNearby(m, now));
-            case "NOTIFY_ADMIN" -> warnings.notifyAdmins("§6[AI] §f" + a.reason(), "ai-note:" + a.reason().hashCode(),
-                    now, settings.adminAlertCooldownSeconds * 1000L);
-            default -> { }
-        }
-    }
-
-    /** Main Thread. Snapshot đã thu thập, không chứa tên người chơi. */
-    public AIAnalyzer.AnalysisInput snapshotForAi(long nowMs) {
-        List<AIAnalyzer.MachineSummary> summaries = new ArrayList<>();
-        for (Machine m : tracker.all()) {
-            if (summaries.size() >= AI_MAX_MACHINES) {
-                break;
-            }
-            double[] act = m.seriesActivity();
-            double[] msp = m.seriesMspt();
-            summaries.add(new AIAnalyzer.MachineSummary(
-                    m.id, m.world, m.region.minX(), m.region.minY(), m.region.minZ(),
-                    m.region.maxX(), m.region.maxY(), m.region.maxZ(),
-                    m.state.name(), m.severity.name(), m.correlated, m.eligible, m.confidence,
-                    tail(act), tail(msp),
-                    m.components.pistons, m.components.hoppers, m.components.dispensers,
-                    m.components.observers, m.components.tnt, m.components.redstoneParts,
-                    m.boundaryClear, List.copyOf(m.evidence)));
-        }
-        List<PerfSample> perfTail = perf.recent(60);
-        int active = (int) tracker.all().stream().filter(m -> m.severity.atLeast(Severity.LOW)).count();
-        return new AIAnalyzer.AnalysisInput(nowMs, perfTail, summaries, active, 0L);
-    }
-
-    private static double[] tail(double[] a) {
-        int from = Math.max(0, a.length - AI_SERIES_TAIL);
-        double[] out = new double[a.length - from];
-        System.arraycopy(a, from, out, 0, out.length);
-        return out;
     }
 }
