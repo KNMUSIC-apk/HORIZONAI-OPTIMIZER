@@ -6,13 +6,17 @@ import com.horizon.ai.analyzer.HealthReport;
 import com.horizon.ai.performance.PerfSample;
 import com.horizon.ai.utils.Settings;
 
+import java.io.IOException;
+import java.net.http.HttpTimeoutException;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Logger;
 
 /**
@@ -20,7 +24,8 @@ import java.util.logging.Logger;
  * - Giới hạn tần suất
  * - Giới hạn request/giờ
  * - Timeout
- * - Retry có backoff
+ * - Retry có exponential backoff
+ * - Retry có chọn lọc theo loại lỗi
  * - Circuit breaker
  *
  * NGUYÊN TẮC:
@@ -60,6 +65,11 @@ public final class AIAnalyzer {
 
     private static final int MAX_INPUT_CHARS = 60_000;
     private static final long HOUR_MS = 3_600_000L;
+
+    // Thời gian chờ giữa các lần retry.
+    private static final long[] RETRY_DELAYS_SECONDS = {
+            2L, 5L, 10L, 20L
+    };
 
     /** Tóm tắt một máy gửi cho AI. KHÔNG chứa tên người chơi. */
     public record MachineSummary(
@@ -140,7 +150,7 @@ public final class AIAnalyzer {
 
         String key = null;
 
-        // 1. Ưu tiên Environment Variable
+        // 1. Ưu tiên Environment Variable.
         if (settings.aiKeyEnv != null
                 && !settings.aiKeyEnv.isBlank()) {
 
@@ -154,12 +164,12 @@ public final class AIAnalyzer {
             }
         }
 
-        // 2. Fallback sang config.yml
+        // 2. Fallback sang config.yml.
         if (key == null || key.isBlank()) {
             key = settings.aiApiKey;
         }
 
-        // 3. Kiểm tra API Key
+        // 3. Kiểm tra API Key.
         if (key == null || key.isBlank()) {
             log.warning(
                     "[HorizonAI] Chưa cấu hình API Key. "
@@ -169,7 +179,7 @@ public final class AIAnalyzer {
             return null;
         }
 
-        // 4. Kiểm tra Provider
+        // 4. Kiểm tra Provider.
         if (!"openai".equals(settings.aiProvider)
                 && !"openai-compatible".equals(settings.aiProvider)) {
 
@@ -180,7 +190,7 @@ public final class AIAnalyzer {
             return null;
         }
 
-        // 5. Khởi tạo Provider
+        // 5. Khởi tạo Provider.
         try {
             return new OpenAIProvider(
                     settings.aiEndpoint,
@@ -302,7 +312,7 @@ public final class AIAnalyzer {
                     );
                 } else {
                     log.warning(
-                            "[HorizonAI] AI không khả dụng: "
+                            "[HorizonAI] AI không khả dụng sau khi retry: "
                             + describeError(ex)
                     );
                 }
@@ -336,8 +346,6 @@ public final class AIAnalyzer {
 
     /**
      * Truy xuất nguyên nhân gốc của lỗi.
-     * Giúp tránh chỉ hiển thị CompletionException
-     * hoặc ExecutionException.
      */
     private static Throwable unwrapError(Throwable error) {
 
@@ -368,47 +376,162 @@ public final class AIAnalyzer {
             return root.getClass().getSimpleName();
         }
 
-        // Tránh ghi dữ liệu quá dài vào console.
-        if (message.length() > 300) {
-            message = message.substring(0, 300) + "...";
+        if (message.length() > 500) {
+            message = message.substring(0, 500) + "...";
         }
 
         return root.getClass().getSimpleName() + ": " + message;
     }
 
     /**
-     * Retry với exponential backoff.
+     * Kiểm tra lỗi có thể retry hay không.
+     *
+     * Retry:
+     * - HTTP 429 (trừ insufficient_quota).
+     * - HTTP 500, 502, 503, 504.
+     * - Timeout.
+     * - Lỗi kết nối mạng.
+     *
+     * Không retry:
+     * - HTTP 400, 401, 403, 404.
+     * - Hết quota hoặc billing.
+     * - Lỗi schema/phân tích JSON.
+     */
+    private static boolean isRetryable(Throwable error) {
+
+        Throwable root = unwrapError(error);
+
+        if (root instanceof TimeoutException
+                || root instanceof HttpTimeoutException) {
+            return true;
+        }
+
+        if (!(root instanceof IOException)) {
+            return false;
+        }
+
+        String message = root.getMessage();
+
+        if (message == null) {
+            return true;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+
+        // Quota/billing không thể giải quyết bằng retry.
+        if (lower.contains("insufficient_quota")
+                || lower.contains("billing")
+                || lower.contains("quota exceeded")) {
+            return false;
+        }
+
+        // Retry các HTTP status tạm thời.
+        if (lower.contains("http 429")
+                || lower.contains("http 500")
+                || lower.contains("http 502")
+                || lower.contains("http 503")
+                || lower.contains("http 504")) {
+            return true;
+        }
+
+        // Các HTTP status khác không retry.
+        if (lower.matches("(?s).*http\\s+\\d{3}.*")) {
+            return false;
+        }
+
+        // IOException mạng thông thường có thể thử lại.
+        return true;
+    }
+
+    /**
+     * Lấy thời gian chờ tương ứng với lần retry.
+     */
+    private static long getRetryDelay(int attempt) {
+
+        int index = Math.min(
+                attempt,
+                RETRY_DELAYS_SECONDS.length - 1
+        );
+
+        return RETRY_DELAYS_SECONDS[index];
+    }
+
+    /**
+     * Retry với exponential backoff có giới hạn.
+     *
+     * attempt = 0 là request đầu tiên.
+     * aiMaxRetries là số lần retry bổ sung.
      */
     private CompletableFuture<String> callWithRetry(
             String user,
             int attempt
     ) {
 
-        return provider.complete(SYSTEM_PROMPT, user)
+        CompletableFuture<String> request;
+
+        try {
+            request = provider.complete(SYSTEM_PROMPT, user);
+
+        } catch (Exception e) {
+            request = CompletableFuture.failedFuture(e);
+        }
+
+        return request
                 .orTimeout(
                         settings.aiTimeoutSeconds + 5L,
                         TimeUnit.SECONDS
                 )
-                .exceptionallyCompose(ex -> {
+                .handle((result, error) -> {
 
-                    if (attempt >= settings.aiMaxRetries) {
-                        return CompletableFuture.failedFuture(ex);
+                    if (error == null) {
+                        return CompletableFuture.completedFuture(result);
                     }
 
-                    long backoffSeconds = 1L << attempt;
+                    Throwable root = unwrapError(error);
 
-                    return CompletableFuture
-                            .supplyAsync(
-                                    () -> null,
-                                    CompletableFuture.delayedExecutor(
-                                            backoffSeconds,
-                                            TimeUnit.SECONDS
+                    boolean canRetry =
+                            isRetryable(root)
+                            && attempt < Math.max(0, settings.aiMaxRetries);
+
+                    if (!canRetry) {
+                        return CompletableFuture.<String>failedFuture(root);
+                    }
+
+                    long delay = getRetryDelay(attempt);
+
+                    log.warning(
+                            "[HorizonAI] AI gặp lỗi tạm thời: "
+                            + describeError(root)
+                            + ". Thử lại lần "
+                            + (attempt + 1)
+                            + "/"
+                            + settings.aiMaxRetries
+                            + " sau "
+                            + delay
+                            + " giây."
+                    );
+
+                    CompletionStage<String> delayedRetry =
+                            CompletableFuture
+                                    .runAsync(
+                                            () -> {
+                                                // Chỉ dùng để tạo độ trễ.
+                                            },
+                                            CompletableFuture.delayedExecutor(
+                                                    delay,
+                                                    TimeUnit.SECONDS
+                                            )
                                     )
-                            )
-                            .thenCompose(
-                                    x -> callWithRetry(user, attempt + 1)
-                            );
-                });
+                                    .thenCompose(
+                                            ignored -> callWithRetry(
+                                                    user,
+                                                    attempt + 1
+                                            )
+                                    );
+
+                    return delayedRetry.toCompletableFuture();
+                })
+                .thenCompose(future -> future);
     }
 
     /**
