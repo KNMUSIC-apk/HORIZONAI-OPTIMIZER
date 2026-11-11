@@ -16,7 +16,7 @@ Plugin Paper/Purpur 1.21.11 (Java 21) giám sát hiệu suất server, phát hi�
 | Phân tích | Rule-based + Statistical Anomaly + Performance Correlation (Pearson), Clock Detector |
 | Cảnh báo L1 | Chỉ gửi cho người chơi gần máy, ưu tiên người kích hoạt, có cooldown theo máy và theo người chơi |
 | Cách ly L2 | Chỉ hủy piston / dispenser / hopper **trong hộp của đúng một máy**; có Restore; snapshot trạng thái; lưu DB để phục hồi sau khi restart |
-| AI | Provider OpenAI-compatible, đổi qua config; API key từ biến môi trường; timeout, retry có backoff, rate limit theo giờ, circuit breaker; AI chỉ **phủ quyết** cách ly, không tự kích hoạt |
+| AI | Provider OpenAI-compatible, đổi qua config; API key từ biến môi trường hoặc `ai.api-key` trong config; timeout, retry có backoff, rate limit theo giờ, circuit breaker; AI chỉ **phủ quyết** cách ly, không tự kích hoạt |
 | Chunk / Entity / Hopper | Quét tăng dần (incremental), chỉ **cảnh báo**: entity, item rơi, mob farm theo ngưỡng từng loại, hopper |
 | Hành động | Mọi đề xuất (AI hoặc cục bộ) đi qua `ActionValidator`; chỉ whitelist mới tự thực hiện |
 | Lệnh | `status`, `analyze`, `report`, `redstone list/inspect/isolate/restore`, `optimize`, `history`, `whitelist`, `reload` |
@@ -115,6 +115,15 @@ ai:
 ```
 
 Dùng nhà cung cấp tương thích OpenAI khác: đổi `endpoint` sang địa chỉ HTTPS của họ và đặt `provider: openai-compatible`. Endpoint không HTTPS sẽ bị từ chối (trừ localhost).
+
+**Cách 2: dán key trực tiếp vào `config.yml`** (dùng khi không đặt được biến môi trường, ví dụ trên panel hosting):
+
+```yaml
+ai:
+  api-key: "DÁN_KEY_CỦA_BẠN"
+```
+
+Thứ tự ưu tiên: biến môi trường `HORIZONAI_AI_KEY` → `ai.api-key`. Sau khi sửa config, chạy `/horizonai reload`. Khi nạp thành công, console ghi nguồn key (không hiển thị giá trị). Không commit file config có key lên GitHub.
 
 **Ràng buộc bảo mật của AI:**
 - AI chỉ nhận snapshot JSON (hiệu suất, thống kê máy, bằng chứng). **Không** nhận tên người chơi, không có quyền truy cập world, không thực thi lệnh.
