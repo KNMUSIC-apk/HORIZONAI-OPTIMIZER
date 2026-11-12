@@ -110,13 +110,13 @@ class LUTEngineTest {
     }
 
     @Test
-    void strongPositiveCorrelationIsCorrelatedButStillNeedsAdmin() {
+    void strongPositiveCorrelationIsCorrelatedAndEligibleForAutoIsolation() {
         LUTResult r = DEFAULT.analyze(strongMachine(45, 0, true, true));
         assertTrue(r.features().correlation() > 0.99);
         assertTrue(r.decision().correlated());
         assertEquals(2, r.decision().level());
-        assertFalse(r.decision().autoIsolationAllowed(), "Mặc định không được tự cách ly");
-        assertEquals("PENDING_ADMIN_APPROVAL", LUTReportBuilder.decisionLabel(r));
+        assertTrue(r.decision().autoIsolationAllowed(), "Mặc định: tự cách ly khi đủ bằng chứng");
+        assertEquals("PENDING_AUTO_ISOLATION", LUTReportBuilder.decisionLabel(r));
     }
 
     @Test
@@ -254,7 +254,7 @@ class LUTEngineTest {
         assertTrue(r.confidence() >= 0.70, "Độ tin cậy: " + r.confidence());
         assertTrue(r.decision().isolationEligible());
         assertEquals(2, r.decision().level());
-        assertFalse(r.decision().autoIsolationAllowed());
+        assertTrue(r.decision().autoIsolationAllowed());
         assertTrue(r.decision().blockers().isEmpty());
     }
 

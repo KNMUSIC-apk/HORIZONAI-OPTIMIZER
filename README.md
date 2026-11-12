@@ -46,7 +46,7 @@ Admin approval / Safe actions ActionValidator + MachineIsolation (cách ly có s
 - Điểm số **không** đủ để cách ly. Level 2 cần đủ mọi cổng bằng chứng (mục 3).
 - Tương quan Pearson **không** được coi là bằng chứng nhân quả. Nó chỉ là một cổng cần có.
 - Clock nhanh chỉ là dấu hiệu hoạt động, không tự động bị coi là gây lag.
-- Mặc định: `require-admin-approval: true`, `auto-isolate: false`.
+- Mặc định: `require-admin-approval: false`, `auto-isolate: true`, trì hoãn `isolation-delay-seconds: 30` tính từ lần cảnh báo đầu tiên. Đặt `require-admin-approval: true` để buộc Admin duyệt mọi cách ly.
 
 ---
 
@@ -105,7 +105,7 @@ Ngoài ra máy phải đã bị cảnh báo đủ `redstone.warnings-before-isol
 
 Khi chưa đủ điều kiện, báo cáo liệt kê lý do cụ thể (`/horizonai redstone inspect <id>`).
 
-**Level 3 (cách ly)** chỉ qua `MachineIsolation`, với Admin duyệt (`/horizonai redstone isolate <id>`). Tự cách ly chỉ xảy ra khi `lut.safety.auto-isolate: true` **và** `require-admin-approval: false`.
+**Level 3 (cách ly)** chỉ qua `MachineIsolation`. Khi máy đủ mọi cổng bằng chứng và đã cảnh báo đủ `redstone.isolation-delay-seconds` (30 giây) kể từ lần cảnh báo đầu tiên, plugin tự cách ly (điều kiện: `lut.safety.auto-isolate: true` và `require-admin-approval: false`). Nếu `require-admin-approval: true`, Admin phải chạy `/horizonai redstone isolate <id>`. Cách ly luôn khôi phục được bằng `/horizonai redstone restore <id>`.
 
 ---
 

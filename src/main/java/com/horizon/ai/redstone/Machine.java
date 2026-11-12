@@ -54,6 +54,8 @@ public final class Machine {
 
     public int warningCount;
     public long lastWarningMillis;
+    /** Thời điểm bắt đầu đợi tự cách ly (lần cảnh báo đầu tiên trong đợt hiện tại), 0 nếu chưa có. */
+    public long warnStartMillis;
     public int isolationCount;
     public long lastRestoredMillis;
     public long pendingSinceMillis;

@@ -267,17 +267,47 @@ public final class RedstoneGuardian {
                 m.state = Machine.State.WARNED;
             }
         }
+        // Đồng hồ tự cách ly bắt đầu ở Level 1 đầu tiên, kể cả khi không có người chơi nào gần để nhận cảnh báo.
+        if (d.level() >= 1) {
+            if (m.warnStartMillis == 0) {
+                m.warnStartMillis = nowMs;
+            }
+        } else if (m.state != Machine.State.PENDING_ISOLATION) {
+            // Máy ngừng đạt Level 1 thì đặt lại đồng hồ: chỉ tính cảnh báo liên tục.
+            m.warnStartMillis = 0;
+        }
         // Trở lại bình thường sau một thời gian dài không vi phạm
         if (m.state == Machine.State.WARNED && !s.atLeast(Severity.MEDIUM)
                 && nowMs - m.lastWarningMillis > 3L * settings.warnCooldownSeconds * 1000L) {
             m.state = Machine.State.OBSERVED;
             m.warningCount = 0;
+            m.warnStartMillis = 0;
             m.log("Hoạt động trở lại bình thường");
         }
         if (s.atLeast(Severity.HIGH) && m.correlated && settings.adminAlertEnabled
                 && s.atLeast(settings.adminAlertMinLevel)) {
             warnings.notifyAdmins("§c[" + s + "] §fMáy §e" + m.id + " §fcó tương quan với lag. Mã: "
                     + m.id, "alert:" + m.id, nowMs, alertCooldown);
+        }
+
+        // AUTO: máy đủ bằng chứng và đã bị cảnh báo đủ thời gian trễ thì cách ly ngay, không cần Admin.
+        // Thời gian đếm từ lần cảnh báo đầu tiên của đợt hiện tại (redstone.isolation-delay-seconds).
+        if (d.autoIsolationAllowed() && m.eligible && m.warnStartMillis > 0
+                && (m.state == Machine.State.WARNED || m.state == Machine.State.PENDING_ISOLATION)
+                && nowMs - m.warnStartMillis >= settings.isolationDelaySeconds * 1000L) {
+            World w = Bukkit.getWorld(m.world);
+            if (w != null) {
+                tracker.scanComponents(m, w, wi);
+            }
+            MachineIsolation.Outcome o = isolation.isolate(m, "AUTO", nowMs, false);
+            if (o == MachineIsolation.Outcome.OK) {
+                warnings.notifyAdmins("§cĐã tự động cách ly máy §f" + m.id + "§c sau cảnh báo. "
+                        + "Khôi phục: /horizonai redstone restore " + m.id, "isolated:" + m.id, nowMs, alertCooldown);
+            } else {
+                m.log("Tự cách ly chưa thực hiện được: " + o + ", thử lại sau " + settings.isolationDelaySeconds + " giây");
+                m.warnStartMillis = nowMs;
+            }
+            return;
         }
 
         // LEVEL 2: đã cảnh báo đủ số lần VÀ LUT xác nhận đủ mọi cổng bằng chứng.
@@ -291,36 +321,16 @@ public final class RedstoneGuardian {
             m.log("Đủ điều kiện Level 2 (" + v.decision() + "), "
                     + (auto ? "sẽ tự cách ly sau trì hoãn" : "chờ Admin duyệt"));
             String action = auto
-                    ? "Sẽ tự động cách ly sau " + settings.isolationDelaySeconds + " giây."
+                    ? "Sẽ tự động cách ly sau " + settings.isolationDelaySeconds + " giây kể từ lần cảnh báo đầu."
                     : "Duyệt bằng: /horizonai redstone isolate " + m.id;
             warnings.notifyAdmins("§cMáy §f" + m.id + " §cđủ điều kiện cách ly Level 2. " + action,
                     "pending:" + m.id, nowMs, alertCooldown);
         }
 
-        if (m.state == Machine.State.PENDING_ISOLATION) {
-            if (!m.eligible) {
-                m.state = Machine.State.WARNED;
-                m.pendingSinceMillis = 0;
-                m.log("Điều kiện không còn đủ, hủy chờ cách ly");
-                return;
-            }
-            // Tự cách ly chỉ khi cấu hình cho phép (đã loại trừ require-admin-approval) và đã hết trì hoãn.
-            if (d.autoIsolationAllowed() && nowMs - m.pendingSinceMillis >= settings.isolationDelaySeconds * 1000L) {
-                World w = Bukkit.getWorld(m.world);
-                if (w != null) {
-                    tracker.scanComponents(m, w, wi);
-                }
-                MachineIsolation.Outcome o = isolation.isolate(m, "AUTO", nowMs, false);
-                if (o == MachineIsolation.Outcome.OK) {
-                    warnings.notifyAdmins("§cĐã tự động cách ly máy §f" + m.id + "§c (Level 2). "
-                            + "Khôi phục: /horizonai redstone restore " + m.id, "isolated:" + m.id, nowMs, alertCooldown);
-                } else {
-                    m.log("Không thể tự động cách ly: " + o);
-                    m.pendingSinceMillis = 0;
-                    m.state = o == MachineIsolation.Outcome.AMBIGUOUS_BOUNDARY
-                            ? Machine.State.AMBIGUOUS : Machine.State.WARNED;
-                }
-            }
+        if (m.state == Machine.State.PENDING_ISOLATION && !m.eligible) {
+            m.state = Machine.State.WARNED;
+            m.pendingSinceMillis = 0;
+            m.log("Điều kiện không còn đủ, hủy chờ cách ly");
         }
     }
 }

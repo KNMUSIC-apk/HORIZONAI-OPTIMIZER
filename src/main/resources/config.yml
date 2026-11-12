@@ -96,10 +96,11 @@ lut:
     require-correlation: true
     require-clear-boundary: true
     require-complete-scan: true
-    # Mặc định: mọi cách ly phải do Admin duyệt.
-    require-admin-approval: true
+    # false: máy đủ bằng chứng sẽ được cách ly tự động (không cần Admin).
+    # true: mọi cách ly phải do Admin duyệt bằng /horizonai redstone isolate <id>.
+    require-admin-approval: false
     # Chỉ có tác dụng khi require-admin-approval = false.
-    auto-isolate: false
+    auto-isolate: true
 
   performance:
     # Ngân sách thời gian LUT mỗi cửa sổ (ms). Vượt ngân sách thì các máy còn lại chỉ ghi lịch sử.
@@ -127,8 +128,8 @@ redstone:
   # Số lần cảnh báo Level 1 trước khi chuyển sang Level 2.
   warnings-before-isolation: 2
 
-  # Thời gian chờ (giây) giữa Level 2 và tự cách ly (chỉ khi lut.safety.auto-isolate = true).
-  isolation-delay-seconds: 60
+  # Thời gian (giây) tính từ lần cảnh báo đầu tiên đến khi tự cách ly (chỉ khi lut.safety.auto-isolate = true).
+  isolation-delay-seconds: 30
   boundary-scan-radius: 24
 
   warning:

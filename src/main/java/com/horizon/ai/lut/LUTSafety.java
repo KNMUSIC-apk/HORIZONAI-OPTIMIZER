@@ -25,7 +25,7 @@ public record LUTSafety(
     }
 
     public static LUTSafety defaults() {
-        return new LUTSafety(true, true, true, true, false);
+        return new LUTSafety(true, true, true, false, true);
     }
 
     /** Tự cách ly chỉ được phép khi cấu hình bật và Admin không bắt buộc duyệt. */

@@ -484,8 +484,8 @@ public final class Settings {
                 log.warning("[HorizonAI] lut.safety." + k + " = false bị bỏ qua: cổng này luôn bắt buộc để cách ly an toàn.");
             }
         }
-        boolean requireAdmin = boolKey(c, log, "lut.safety.require-admin-approval", null, true);
-        boolean autoIsolate = boolKey(c, log, "lut.safety.auto-isolate", "redstone.auto-isolate", false);
+        boolean requireAdmin = boolKey(c, log, "lut.safety.require-admin-approval", null, false);
+        boolean autoIsolate = boolKey(c, log, "lut.safety.auto-isolate", "redstone.auto-isolate", true);
         if (autoIsolate && requireAdmin) {
             log.warning("[HorizonAI] lut.safety.auto-isolate = true bị vô hiệu vì require-admin-approval = true.");
         }
