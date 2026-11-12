@@ -120,6 +120,15 @@ class LUTEngineTest {
     }
 
     @Test
+    void sustainedBurstWarnsWithoutCorrelationButNeverIsolates() {
+        LUTResult r = DEFAULT.analyze(input(fill(24, 900), fill(24, 40), 900, 100, 0, 0, 40, 0,
+                true, true, comp(4, 2, 0, 20)));
+        assertEquals(1, r.decision().level());
+        assertFalse(r.decision().correlated());
+        assertFalse(r.decision().isolationEligible());
+    }
+
+    @Test
     void negativeCorrelationGivesNoCredit() {
         double[] act = cyclic(24);
         LUTResult r = DEFAULT.analyze(input(act, msptFollowing(act, 80, -0.05), 700, 200, 0, 0, 45, 0,

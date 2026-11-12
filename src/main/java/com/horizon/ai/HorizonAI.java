@@ -1,6 +1,7 @@
 package com.horizon.ai;
 
 import com.horizon.ai.chunk.ChunkHealthScanner;
+import com.horizon.ai.chunk.EntityOptimizer;
 import com.horizon.ai.commands.HorizonCommand;
 import com.horizon.ai.events.IsolationListener;
 import com.horizon.ai.events.RedstoneEventListener;
@@ -48,6 +49,7 @@ public final class HorizonAI extends JavaPlugin {
     private LUTEngine lut;
     private RedstoneGuardian guardian;
     private ChunkHealthScanner chunks;
+    private EntityOptimizer entities;
     private BukkitTask maintenance;
 
     @Override
@@ -107,6 +109,7 @@ public final class HorizonAI extends JavaPlugin {
         guardian = new RedstoneGuardian(this, settings, getLogger(), perf, activity, actors, tracker,
                 isolation, warnings, validator, lut);
         chunks = new ChunkHealthScanner(this, settings, warnings);
+        entities = new EntityOptimizer(this, settings, getLogger());
 
         PluginManager pm = getServer().getPluginManager();
         pm.registerEvents(new IsolationListener(isolation), this);
@@ -115,6 +118,7 @@ public final class HorizonAI extends JavaPlugin {
         perf.start();
         guardian.start();
         chunks.start();
+        entities.start();
         loadIsolationsAsync();
     }
 
@@ -127,6 +131,9 @@ public final class HorizonAI extends JavaPlugin {
         }
         if (chunks != null) {
             chunks.stop();
+        }
+        if (entities != null) {
+            entities.stop();
         }
         HandlerList.unregisterAll(this);
     }
@@ -185,6 +192,10 @@ public final class HorizonAI extends JavaPlugin {
 
     public LUTEngine lut() {
         return lut;
+    }
+
+    public EntityOptimizer entities() {
+        return entities;
     }
 
     public RedstoneGuardian guardian() {

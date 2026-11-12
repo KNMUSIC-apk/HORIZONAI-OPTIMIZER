@@ -50,8 +50,8 @@ lut:
   enabled: true
 
   analysis:
-    # Số mẫu (cửa sổ) tối thiểu trước khi được kết luận.
-    min-samples: 12
+    # Số mẫu (cửa sổ) tối thiểu trước khi được kết luận (6 cửa sổ ≈ 60 giây).
+    min-samples: 6
     # Số cửa sổ dùng để phân tích (tối đa 120).
     history-size: 120
     # Độ tin cậy tối thiểu (0.0-1.0) để đủ điều kiện chờ cách ly.
@@ -114,6 +114,26 @@ lut:
 # ==========================================================
 # REDSTONE (phát hiện và cách ly)
 # ==========================================================
+
+  # Tối ưu thực thể theo chunk: khi quá nhiều thuyền / mũi tên / cầu tuyết trong MỘT chunk,
+  # xóa bớt về target. Không bao giờ xóa người chơi, thực thể có tên, đang có người ngồi,
+  # bị buộc dây, đã thuần, hoặc trong thế giới/vùng whitelist.
+  entities:
+    enabled: true
+    # Chu kỳ quét (giây) và số chunk đọc mỗi chu kỳ (luân phiên).
+    scan-interval-seconds: 5
+    chunks-per-cycle: 16
+    boats:
+      max: 8
+      target: 4
+    arrows:
+      max: 40
+      target: 20
+    snowballs:
+      max: 40
+      target: 20
+    # Khi xóa cầu tuyết trong chunk, xóa luôn người tuyết (snow golem) trong chunk đó.
+    remove-snowmen-with-snowballs: true
 
 redstone:
   detection-threshold-events-per-window: 400

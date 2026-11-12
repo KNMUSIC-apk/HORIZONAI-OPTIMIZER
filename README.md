@@ -268,3 +268,21 @@ com.horizon.ai
 ├── storage/                        Database (SQLite)
 └── utils/                          Settings, Region, Severity, Text, BlockPos
 ```
+
+## Tối ưu thực thể (lut.entities)
+
+LUT cũng dọn bớt thực thể quá tải **theo từng chunk**, luôn trên Main Thread:
+
+- **Thuyền** (`boats.max` / `boats.target`, mặc định 8 → 4).
+- **Mũi tên** (`arrows.max` / `arrows.target`, mặc định 40 → 20).
+- **Cầu tuyết** (`snowballs.max` / `snowballs.target`, mặc định 40 → 20).
+- Khi xóa cầu tuyết trong chunk và `remove-snowmen-with-snowballs: true`, xóa luôn **người tuyết** trong chunk đó.
+
+Không bao giờ xóa: người chơi, thực thể có tên tùy chỉnh, thực thể đang có người ngồi hoặc đang cưỡi, thực thể bị buộc dây, thú đã thuần, và mọi thực thể trong thế giới/vùng whitelist. Chỉ xóa trong chunk đã tải. Xem số đã xóa bằng `/horizonai lut status`.
+
+Lưu ý: đây là thay đổi có chủ đích so với bản trước (bản trước không tự xóa thực thể). Tắt bằng `lut.entities.enabled: false`.
+
+## Cảnh báo sớm hơn
+
+- `lut.analysis.min-samples` mặc định là 6 (khoảng 60 giây thay vì 2 phút).
+- Cảnh báo Level 1 cũng được phát khi hoạt động bùng nổ kéo dài (ít nhất 3 cửa sổ liên tiếp và sự kiện từ 2 lần ngưỡng trở lên), kể cả khi chưa có tương quan MSPT. Trường hợp này **chỉ cảnh báo, không cách ly**.

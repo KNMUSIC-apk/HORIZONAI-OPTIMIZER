@@ -1,6 +1,7 @@
 
 package com.horizon.ai.utils;
 
+import com.horizon.ai.chunk.EntityOptimizerConfig;
 import com.horizon.ai.lut.LUTProfile;
 import com.horizon.ai.lut.LUTSafety;
 import com.horizon.ai.lut.LUTThresholds;
@@ -32,6 +33,7 @@ public final class Settings {
     // lut (phân tích cục bộ, không dùng AI)
     public final boolean lutEnabled;
     public final LUTProfile lutProfile;
+    public final EntityOptimizerConfig entityOptimizer;
 
     // redstone
     public final int rsThresholdEvents;
@@ -350,6 +352,21 @@ public final class Settings {
         }
 
         lutProfile = readLut(c, log, rsThresholdEvents, msptCritical);
+
+        int boatMax = intKey(c, log, "lut.entities.boats.max", null, 8, 1, 1000);
+        int arrowMax = intKey(c, log, "lut.entities.arrows.max", null, 40, 1, 1000);
+        int snowballMax = intKey(c, log, "lut.entities.snowballs.max", null, 40, 1, 1000);
+        entityOptimizer = new EntityOptimizerConfig(
+                boolKey(c, log, "lut.entities.enabled", null, true),
+                intKey(c, log, "lut.entities.scan-interval-seconds", null, 5, 1, 300),
+                intKey(c, log, "lut.entities.chunks-per-cycle", null, 16, 1, 256),
+                boatMax,
+                intKey(c, log, "lut.entities.boats.target", null, 4, 0, 1000),
+                arrowMax,
+                intKey(c, log, "lut.entities.arrows.target", null, 20, 0, 1000),
+                snowballMax,
+                intKey(c, log, "lut.entities.snowballs.target", null, 20, 0, 1000),
+                boolKey(c, log, "lut.entities.remove-snowmen-with-snowballs", null, true));
     }
 
     public boolean isWorldWhitelisted(String world) {
@@ -469,7 +486,7 @@ public final class Settings {
                 numKey(c, log, "lut.thresholds.mspt-delta-minimum", "redstone.min-mspt-correlation-delta", 5.0, 0.5, 500),
                 msptCritical,
                 warn, high, crit,
-                intKey(c, log, "lut.analysis.min-samples", "redstone.min-samples", 12, 4, 120),
+                intKey(c, log, "lut.analysis.min-samples", "redstone.min-samples", 6, 4, 120),
                 Math.min(
                         intKey(c, log, "lut.analysis.history-size", null, 120, 4, 120),
                         intKey(c, log, "lut.performance.max-history-samples", null, 120, 4, 120)),

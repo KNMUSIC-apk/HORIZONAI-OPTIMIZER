@@ -84,10 +84,13 @@ public final class LUTDecisionEngine {
         }
 
         boolean eligible = blockers.isEmpty();
+        // Cảnh báo (Level 1) khi: mức MEDIUM trở lên có tương quan, HOẶC hoạt động bùng nổ kéo dài
+        // (>= 3 cửa sổ liên tiếp và sự kiện >= 2x ngưỡng). Burst chỉ cảnh báo, KHÔNG đủ để cách ly.
+        boolean burst = f.consecutiveHighWindows() >= 3 && f.eventsNow() >= 2L * t.eventThreshold();
         int level;
         if (eligible) {
             level = 2;
-        } else if (severity.atLeast(Severity.MEDIUM) && correlated) {
+        } else if ((severity.atLeast(Severity.MEDIUM) && correlated) || burst) {
             level = 1;
         } else {
             level = 0;

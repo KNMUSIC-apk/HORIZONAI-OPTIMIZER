@@ -46,7 +46,7 @@ public record LUTThresholds(
 
     public static LUTThresholds defaults() {
         return new LUTThresholds(1.0, 2.0, 3.0, 0.50, 5.0, 60.0,
-                45, 65, 80, 12, 120, 0.70, 2.0, 0.25, 400);
+                45, 65, 80, 6, 120, 0.70, 2.0, 0.25, 400);
     }
 
     private static double finitePositive(double v, double def) {

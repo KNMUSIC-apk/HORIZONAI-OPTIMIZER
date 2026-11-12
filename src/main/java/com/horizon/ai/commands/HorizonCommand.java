@@ -135,6 +135,8 @@ public final class HorizonCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§7Máy theo dõi: §f" + plugin.tracker().size() + " §7| Đã phân tích: §f" + analyzed
                 + " §7| Cảnh báo/chờ: §e" + warned + " §7| Cách ly: §c" + isolated);
         s.sendMessage("§7Tự cách ly: §f" + (p.safety().autoIsolationAllowed() ? "CHO PHÉP" : "TẮT (Admin duyệt)"));
+        s.sendMessage("§7Tối ưu thực thể: §f" + (plugin.settings().entityOptimizer.enabled() ? "BẬT" : "TẮT")
+                + " §7| " + plugin.entities().summary());
         int shown = 0;
         for (Machine m : tracked()) {
             if (shown++ >= 20) {
